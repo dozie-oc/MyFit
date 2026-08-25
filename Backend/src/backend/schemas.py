@@ -29,9 +29,13 @@ class MealCreate(BaseModel):
     """Schema for creating a new meal entry."""
     date: date
     name: str
-    estimated_calories: float
-    override_calories: float | None = None
+    #estimated_calories: float
+    #override_calories: float | None = None
     food_items: list[MealItemCreate]  # List of food items with their details
+
+class MealCaloriesOverride(BaseModel):
+    """Schema for overriding the calories of a meal."""
+    override_calories: float
 
 class FoodItemCreate(BaseModel):
     """Schema for creating a new food item entry."""
@@ -104,4 +108,8 @@ class ExerciseOut(BaseModel):
     reps : int | None = None
     calories_burned : int | None = None
 
-    
+class FoodItemOut(BaseModel):
+    id: int
+    name: str
+    calories_per_unit: int
+    unit: str

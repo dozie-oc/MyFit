@@ -2,7 +2,7 @@ from sqlmodel import Field, SQLModel
 from datetime import date, datetime
 
 class User(SQLModel, table=True):
-    id: int = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     username: str
     #name: str
     hashed_password: str
@@ -15,7 +15,7 @@ class User(SQLModel, table=True):
     #is_active: bool = True
 
 class DailySummary(SQLModel, table=True):
-    id: int = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id")
     date: date
     #weight: float
@@ -26,7 +26,7 @@ class DailySummary(SQLModel, table=True):
     deleted_at: datetime | None = None
 
 class Habit(SQLModel, table=True):
-    id: int = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id")
     name: str
     description: str | None = None
@@ -35,7 +35,7 @@ class Habit(SQLModel, table=True):
     deleted_at: datetime | None = None
 
 class Meal(SQLModel, table=True):
-    id: int = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id")
     date: date
     calories: float
@@ -43,17 +43,17 @@ class Meal(SQLModel, table=True):
     deleted_at: datetime | None = None
 
 class MealItem(SQLModel, table=True):
-    id: int = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     meal_id: int = Field(foreign_key="meal.id")
     food_id: int = Field(foreign_key="fooditem.id")
-    food_name: str
+    #food_name: str
     quantity: float
     unit: str
     #calories: int
     deleted_at: datetime | None = None
 
 class FoodItem(SQLModel, table=True):
-    id: int = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     name: str
     calories_per_unit: float
     unit : str
@@ -63,7 +63,7 @@ class FoodItem(SQLModel, table=True):
     deleted_at: datetime | None = None
 
 class Exercise(SQLModel, table=True):
-    id: int = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id")
     name: str
     # description: str | None = None
