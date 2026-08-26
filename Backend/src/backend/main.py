@@ -8,5 +8,5 @@ app = FastAPI()
 
 create_db_and_tables
 
-app.include_router(foods_router)
+#app.include_router(foods_router)
 app.include_router(meals_router)
