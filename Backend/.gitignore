@@ -5,8 +5,8 @@ build/
 dist/
 wheels/
 *.egg-info
-/src/backend/seed.py
-/src/backend/test_query.py
+seed.py
+test_query.py
 /myfit.db
 
 # Virtual environments

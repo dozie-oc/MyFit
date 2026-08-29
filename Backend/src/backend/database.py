@@ -1,15 +1,32 @@
-from sqlmodel import create_engine, Session, SQLModel
-from .models import User, DailySummary, Habit, Meal, MealItem, FoodItem, Exercise
+import os
 
-DATABASE_URL = "sqlite:///myfit.db"
+from sqlmodel import Session, SQLModel, create_engine
+
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "sqlite:///database.db"
+)
+
+
+connect_args = {}
+
+if DATABASE_URL.startswith("sqlite"):
+    connect_args = {
+        "check_same_thread": False
+    }
+
 
 engine = create_engine(
     DATABASE_URL,
-    echo=True
+    echo=False,
+    connect_args=connect_args
 )
 
-def create_db_and_tables():
+
+def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
+
 
 def get_session():
     with Session(engine) as session:

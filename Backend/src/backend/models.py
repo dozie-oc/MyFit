@@ -37,6 +37,22 @@ class Habit(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     deleted_at: datetime | None = None
 
+
+class HabitLog(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    habit_id: int = Field(foreign_key="habit.id")
+    user_id: int = Field(foreign_key="user.id")
+
+    date: date
+    completed: bool
+
+class WeightLog(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id")
+
+    date: date
+    weight: float
+
 class Meal(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id")
@@ -74,10 +90,12 @@ class Exercise(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id")
 
+    date: date
     name: str
-    # description: str | None = None
     reps: int | None = None
     duration_minutes: int | None = None
+
     calories_burned_per_minute: float
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
     deleted_at: datetime | None = None
