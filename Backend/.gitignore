@@ -1,5 +1,7 @@
 # Python-generated files
 __pycache__/
+.pytest_cache/
+*.db
 *.py[oc]
 build/
 dist/
@@ -8,6 +10,8 @@ wheels/
 seed.py
 test_query.py
 /myfit.db
+*.env
+/tests
 
 # Virtual environments
 .venv

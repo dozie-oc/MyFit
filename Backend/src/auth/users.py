@@ -2,9 +2,9 @@ from datetime import date
 
 from sqlmodel import Session, select
 
-from backend.models import User
-from backend.schemas import UserCreate
-from .auth import hash_password
+from src.models import User
+from src.schemas import UserCreate
+from src.auth.auth import hash_password
 
 
 def create_user(session: Session, user_data: UserCreate) -> User:

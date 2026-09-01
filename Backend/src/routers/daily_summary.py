@@ -3,13 +3,13 @@ from datetime import date
 from fastapi import APIRouter, HTTPException
 from sqlmodel import Session, select
 
-from backend.dependencies import CurrentUserDep, SessionDep
-from backend.models import (
+from src.dependencies import CurrentUserDep, SessionDep
+from src.models import (
     DailySummary,
     Exercise,
     Meal,
 )
-from backend.schemas import DailySummaryOut
+from src.schemas import DailySummaryOut
 
 
 router = APIRouter(

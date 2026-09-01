@@ -2,15 +2,16 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from .database import create_db_and_tables
+from src.database import create_db_and_tables
 
-from .auth.router import router as auth_router
+from src.auth.router import router as auth_router
 
-from .routers.meals import router as meals_router
-from .routers.exercises import router as exercises_router
-from .routers.habits import router as habits_router
-from .routers.weight import router as weight_router
-from .routers.daily_summary import router as summary_router
+from src.routers.meals import router as meals_router
+from src.routers.exercises import router as exercises_router
+from src.routers.habits import router as habits_router
+from src.routers.weight import router as weight_router
+from src.routers.daily_summary import router as summary_router
+from src.routers.foods import router as food_router
 
 
 @asynccontextmanager
@@ -35,6 +36,7 @@ app.include_router(exercises_router)
 app.include_router(habits_router)
 app.include_router(weight_router)
 app.include_router(summary_router)
+app.include_router(food_router)
 
 
 @app.get("/")

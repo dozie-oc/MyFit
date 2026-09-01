@@ -1,9 +1,9 @@
 from fastapi import APIRouter, status
 from sqlmodel import select
 
-from backend.dependencies import CurrentUserDep, SessionDep
-from backend.models import User, WeightLog
-from backend.schemas import WeightLogCreate, WeightLogOut
+from src.dependencies import CurrentUserDep, SessionDep
+from src.models import User, WeightLog
+from src.schemas import WeightLogCreate, WeightLogOut
 
 
 router = APIRouter(

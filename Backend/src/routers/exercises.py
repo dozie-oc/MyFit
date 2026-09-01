@@ -1,13 +1,13 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
 from sqlmodel import select
 
-from backend.dependencies import CurrentUserDep, SessionDep
-from backend.models import Exercise
-from backend.schemas import ExerciseLogCreate, ExerciseOut
+from src.dependencies import CurrentUserDep, SessionDep
+from src.models import Exercise
+from src.schemas import ExerciseLogCreate, ExerciseOut
 
-from backend.routers.daily_summary import calculate_daily_summary
+from src.routers.daily_summary import calculate_daily_summary
 
 
 router = APIRouter(
@@ -39,7 +39,7 @@ def create_exercise(
     session: SessionDep,
     current_user: CurrentUserDep
 ):
-
+    #-------------------------------------------------------------------------------------------------------------
     # MVP calorie rate.
     #
     # Later this should come from an exercise database
@@ -174,7 +174,7 @@ def delete_exercise(
 
     exercise_date = exercise.date
 
-    exercise.deleted_at = datetime.utcnow()
+    exercise.deleted_at = datetime.now(timezone.utc)
 
     session.add(exercise)
     session.commit()

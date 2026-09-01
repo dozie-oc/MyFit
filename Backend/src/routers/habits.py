@@ -1,11 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
 from sqlmodel import select
 
-from backend.dependencies import CurrentUserDep, SessionDep
-from backend.models import Habit, HabitLog
-from backend.schemas import (
+from src.dependencies import CurrentUserDep, SessionDep
+from src.models import Habit, HabitLog
+from src.schemas import (
     HabitCreate,
     HabitLogCreate,
     HabitLogOut,
@@ -209,7 +209,7 @@ def delete_habit(
             detail="Habit not found"
         )
 
-    habit.deleted_at = datetime.utcnow()
+    habit.deleted_at = datetime.now(timezone.utc)
 
     session.add(habit)
     session.commit()
