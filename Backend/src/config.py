@@ -119,9 +119,9 @@ class Settings(BaseSettings):
     # A future production version could introduce refresh tokens
     # rather than making access tokens excessively long-lived.
     access_token_expire_minutes: int = Field(
-        default=30,
+        default=10080,
         gt=0,
-        le=1440,
+        le=43200,
     )
 
     # ============================================================

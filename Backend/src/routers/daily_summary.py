@@ -49,10 +49,12 @@ def calculate_daily_summary(
 
     calories_out = int(
         sum(
-            (
-                exercise.duration_minutes or 0
+            exercise.calories_burned
+            if exercise.calories_burned > 0
+            else (
+                (exercise.duration_minutes or 0)
+                * exercise.calories_burned_per_minute
             )
-            * exercise.calories_burned_per_minute
             for exercise in exercises
         )
     )

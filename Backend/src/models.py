@@ -384,13 +384,58 @@ class MealItem(SQLModel, table=True):
     deleted_at: datetime | None = None
 
 
+class ExerciseCatalogItem(SQLModel, table=True):
+    """
+    Catalog of standard and custom exercises with default MET values.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    name: str = Field(
+        min_length=1,
+        max_length=100,
+        index=True,
+    )
+
+    category: str = Field(
+        default="cardio",
+        max_length=50,
+        index=True,
+    )
+
+    default_met: float = Field(
+        default=5.0,
+        ge=0,
+    )
+
+    description: str | None = Field(
+        default=None,
+        max_length=500,
+    )
+
+    is_custom: bool = Field(
+        default=False,
+    )
+
+    user_id: int | None = Field(
+        default=None,
+        foreign_key="user.id",
+        index=True,
+    )
+
+    created_at: datetime = Field(
+        default_factory=utc_now,
+    )
+
+    deleted_at: datetime | None = None
+
+
 class Exercise(SQLModel, table=True):
     """
     A logged exercise session.
 
-    calories_burned_per_minute is currently stored with the log so
-    historical calorie calculations remain stable even if we later
-    change our exercise-calorie estimates.
+    Supports both strength workouts (sets, reps, weight_kg) and
+    cardio/endurance (duration_minutes, distance_km, intensity).
     """
 
     id: int | None = Field(default=None, primary_key=True)
@@ -402,12 +447,33 @@ class Exercise(SQLModel, table=True):
 
     date: Date = Field(index=True)
 
+    exercise_catalog_id: int | None = Field(
+        default=None,
+        foreign_key="exercisecatalogitem.id",
+        index=True,
+    )
+
     name: str = Field(
         min_length=1,
         max_length=100,
     )
 
+    category: str = Field(
+        default="other",
+        max_length=50,
+    )
+
+    sets: int | None = Field(
+        default=None,
+        ge=0,
+    )
+
     reps: int | None = Field(
+        default=None,
+        ge=0,
+    )
+
+    weight_kg: float | None = Field(
         default=None,
         ge=0,
     )
@@ -417,7 +483,23 @@ class Exercise(SQLModel, table=True):
         gt=0,
     )
 
+    distance_km: float | None = Field(
+        default=None,
+        ge=0,
+    )
+
+    intensity: str | None = Field(
+        default="moderate",
+        max_length=20,
+    )
+
     calories_burned_per_minute: float = Field(
+        default=5.0,
+        ge=0,
+    )
+
+    calories_burned: float = Field(
+        default=0.0,
         ge=0,
     )
 

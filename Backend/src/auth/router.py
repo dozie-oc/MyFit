@@ -10,11 +10,12 @@ from src.auth.auth import (
     hash_password,
 )
 from src.dependencies import CurrentUserDep, SessionDep
-from src.models import User
+from src.models import User, WeightLog
 from src.schemas import (
     Token,
     UserAuth,
     UserCreate,
+    UserMeasurementsUpdate,
     UserOut,
 )
 
@@ -176,6 +177,58 @@ def get_me(
         age=calculate_age(
             current_user.birthdate,
         ),
+    )
+
+
+@router.patch(
+    "/measurements",
+    response_model=UserOut,
+)
+def update_measurements(
+    data: UserMeasurementsUpdate,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+):
+    """
+    Update the authenticated user's current weight and/or height.
+    When weight is updated, automatically record or update a WeightLog for today.
+    """
+
+    if data.weight is not None:
+        current_user.weight = data.weight
+        today = date.today()
+        existing_log = session.exec(
+            select(WeightLog).where(
+                WeightLog.user_id == current_user.id,
+                WeightLog.date == today,
+            )
+        ).first()
+
+        if existing_log:
+            existing_log.weight = data.weight
+            session.add(existing_log)
+        else:
+            weight_log = WeightLog(
+                user_id=current_user.id,
+                date=today,
+                weight=data.weight,
+            )
+            session.add(weight_log)
+
+    if data.height is not None:
+        current_user.height = data.height
+
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+
+    return UserOut(
+        id=current_user.id,
+        username=current_user.username,
+        weight=current_user.weight,
+        height=current_user.height,
+        birthdate=current_user.birthdate,
+        age=calculate_age(current_user.birthdate),
     )
 
 
