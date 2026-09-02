@@ -61,6 +61,13 @@ class Token(BaseModel):
     token_type: str
 
 
+class UserMeasurementsUpdate(BaseModel):
+    """Input for updating user weight and height measurements."""
+
+    weight: float | None = Field(default=None, gt=0, le=500)
+    height: float | None = Field(default=None, gt=0, le=300)
+
+
 # ============================================================
 # FOODS
 # ============================================================
@@ -232,7 +239,9 @@ class MealItemOut(BaseModel):
     id: int
 
     food_id: int
-    portion_id: int | None
+    food_name: str = ""
+    portion_id: int | None = None
+    portion_name: str | None = None
 
     quantity: float
     unit: str
@@ -344,13 +353,25 @@ class WeightLogOut(BaseModel):
 # ============================================================
 
 
+class ExerciseCatalogItemOut(BaseModel):
+    """Standard or custom exercise definition in the catalog."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    category: str
+    default_met: float
+    description: str | None = None
+    is_custom: bool = False
+
+
 class ExerciseLogCreate(BaseModel):
     """
     Input for recording exercise.
 
-    The client does NOT supply calories burned per minute.
-    That value is controlled by the backend so the client cannot
-    arbitrarily manipulate calorie expenditure.
+    Supports strength workouts (sets, reps, weight) and cardio
+    (duration, distance, intensity).
     """
 
     date: date
@@ -360,7 +381,24 @@ class ExerciseLogCreate(BaseModel):
         max_length=100,
     )
 
+    category: str = Field(
+        default="other",
+        max_length=50,
+    )
+
+    exercise_catalog_id: int | None = None
+
+    sets: int | None = Field(
+        default=None,
+        ge=0,
+    )
+
     reps: int | None = Field(
+        default=None,
+        ge=0,
+    )
+
+    weight_kg: float | None = Field(
         default=None,
         ge=0,
     )
@@ -368,6 +406,16 @@ class ExerciseLogCreate(BaseModel):
     duration_minutes: int | None = Field(
         default=None,
         gt=0,
+    )
+
+    distance_km: float | None = Field(
+        default=None,
+        ge=0,
+    )
+
+    intensity: str | None = Field(
+        default="moderate",
+        max_length=20,
     )
 
     @field_validator("name")
@@ -384,8 +432,14 @@ class ExerciseOut(BaseModel):
     id: int
     date: date
     name: str
-    reps: int | None
-    duration_minutes: int | None
+    category: str = "other"
+    exercise_catalog_id: int | None = None
+    sets: int | None = None
+    reps: int | None = None
+    weight_kg: float | None = None
+    duration_minutes: int | None = None
+    distance_km: float | None = None
+    intensity: str | None = None
     calories_burned: float
 
 

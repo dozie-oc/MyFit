@@ -26,10 +26,10 @@ def build_meal_response(
     meal: Meal
 ) -> MealOut:
     """
-    Build the API response for a meal including its items.
+    Build the API response for a meal including its items and food names.
 
-    MealItem stores nutritional snapshots, so we do not need to
-    recalculate historical nutrition from the current FoodItem.
+    MealItem stores nutritional snapshots, and we resolve human-readable
+    food and portion names for the client display.
     """
 
     items = session.exec(
@@ -39,6 +39,31 @@ def build_meal_response(
         )
     ).all()
 
+    food_ids = {item.food_id for item in items}
+    portion_ids = {item.portion_id for item in items if item.portion_id is not None}
+
+    foods: dict[int, str] = {}
+    if food_ids:
+        foods_list = session.exec(
+            select(FoodItem).where(FoodItem.id.in_(food_ids))
+        ).all()
+        foods = {f.id: f.name for f in foods_list}
+
+    portions: dict[int, str] = {}
+    if portion_ids:
+        from src.models import FoodPortion
+        portions_list = session.exec(
+            select(FoodPortion).where(FoodPortion.id.in_(portion_ids))
+        ).all()
+        portions = {p.id: p.name for p in portions_list}
+
+    out_items: list[MealItemOut] = []
+    for item in items:
+        item_dict = item.model_dump()
+        item_dict["food_name"] = foods.get(item.food_id, f"Food #{item.food_id}")
+        item_dict["portion_name"] = portions.get(item.portion_id) if item.portion_id else None
+        out_items.append(MealItemOut.model_validate(item_dict))
+
     return MealOut(
         id=meal.id,
         date=meal.date,
@@ -47,10 +72,7 @@ def build_meal_response(
         carbs=meal.carbs,
         fat=meal.fat,
         created_at=meal.created_at,
-        items=[
-            MealItemOut.model_validate(item)
-            for item in items
-        ]
+        items=out_items
     )
 
 

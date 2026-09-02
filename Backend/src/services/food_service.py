@@ -128,6 +128,11 @@ class FoodService:
                 "Page number must be greater than zero."
             )
 
+        # Default to high-quality foundational whole food categories
+        # to filter out fluff, complex recipes, and branded duplicates
+        if data_types is None:
+            data_types = ["Foundation", "SR Legacy", "Survey (FNDDS)"]
+
         response = await self.usda_client.search_foods(
             query,
             page_size=page_size,
@@ -136,8 +141,19 @@ class FoodService:
         )
 
         results: list[FoodSearchResult] = []
+        raw_foods = response.get("foods", [])
 
-        for food in response.get("foods", []):
+        # If strict search returned nothing, fall back to searching all data types
+        if not raw_foods and data_types:
+            response = await self.usda_client.search_foods(
+                query,
+                page_size=page_size,
+                page_number=page_number,
+                data_types=None,
+            )
+            raw_foods = response.get("foods", [])
+
+        for food in raw_foods:
             if not isinstance(food, dict):
                 continue
 
@@ -164,6 +180,18 @@ class FoodService:
                 )
             )
 
+        # Rank results: prioritize descriptions starting with the query, then shorter names
+        q_lower = query.lower()
+
+        def _rank_key(item: FoodSearchResult) -> tuple[int, int, int]:
+            name_lower = item.name.lower()
+            starts = 0 if name_lower.startswith(q_lower) else 1
+            contains = 0 if q_lower in name_lower else 1
+            length = len(name_lower)
+            return (starts, contains, length)
+
+        results.sort(key=_rank_key)
+
         try:
             total_hits = int(
                 response.get(
@@ -184,52 +212,85 @@ class FoodService:
     def _extract_nutrients(
         food_data: dict,
     ) -> NormalizedNutrients:
+        """
+        Extract calories, protein, carbs, and fat per 100g.
 
-        values: dict[int, float] = {
-            ENERGY_NUTRIENT_ID: 0.0,
-            PROTEIN_NUTRIENT_ID: 0.0,
-            CARBOHYDRATE_NUTRIENT_ID: 0.0,
-            FAT_NUTRIENT_ID: 0.0,
-        }
+        Supports both the USDA detail endpoint (/food/{fdcId}) and
+        the search endpoint (/foods/search), as well as legacy and
+        FNDDS formats.
+        """
 
-        for nutrient in food_data.get(
-            "foodNutrients",
-            [],
-        ):
+        calories = 0.0
+        protein = 0.0
+        carbs = 0.0
+        fat = 0.0
+
+        for nutrient in food_data.get("foodNutrients", []):
             if not isinstance(nutrient, dict):
                 continue
 
-            nutrient_id = nutrient.get("nutrientId")
+            nutrient_obj = nutrient.get("nutrient") if isinstance(nutrient.get("nutrient"), dict) else {}
 
-            if nutrient_id not in values:
-                continue
+            nutrient_id = nutrient.get("nutrientId") or nutrient_obj.get("id")
+            nutrient_number = str(nutrient.get("nutrientNumber") or nutrient_obj.get("number") or "")
+            nutrient_name = str(nutrient.get("nutrientName") or nutrient_obj.get("name") or "").lower()
+            unit_name = str(nutrient.get("unitName") or nutrient_obj.get("unitName") or "").upper()
 
-            amount = nutrient.get("value")
+            raw_val = nutrient.get("amount") if nutrient.get("amount") is not None else nutrient.get("value")
 
-            if amount is None:
+            if raw_val is None:
                 continue
 
             try:
-                values[nutrient_id] = max(
-                    0.0,
-                    float(amount),
-                )
+                val = max(0.0, float(raw_val))
             except (TypeError, ValueError):
                 continue
 
+            # ── ENERGY / CALORIES ───────────────────────────
+            if (
+                nutrient_id in (1008, 1062, 2047, 2048)
+                or nutrient_number in ("208", "1008")
+                or ("energy" in nutrient_name and unit_name in ("KCAL", "CAL", "KJ"))
+            ):
+                if unit_name == "KJ":
+                    val = val * 0.239006  # Convert kJ to kcal
+                if calories == 0.0 or unit_name == "KCAL":
+                    calories = val
+
+            # ── PROTEIN ─────────────────────────────────────
+            elif (
+                nutrient_id == 1003
+                or nutrient_number == "203"
+                or nutrient_name == "protein"
+                or "protein" in nutrient_name
+            ):
+                if protein == 0.0:
+                    protein = val
+
+            # ── CARBOHYDRATES ───────────────────────────────
+            elif (
+                nutrient_id == 1005
+                or nutrient_number == "205"
+                or "carbohydrate" in nutrient_name
+            ):
+                if carbs == 0.0:
+                    carbs = val
+
+            # ── FAT / TOTAL LIPID ───────────────────────────
+            elif (
+                nutrient_id == 1004
+                or nutrient_number == "204"
+                or "total lipid" in nutrient_name
+                or nutrient_name in ("fat", "total fat")
+            ):
+                if fat == 0.0:
+                    fat = val
+
         return NormalizedNutrients(
-            calories_per_100g=values[
-                ENERGY_NUTRIENT_ID
-            ],
-            protein_per_100g=values[
-                PROTEIN_NUTRIENT_ID
-            ],
-            carbs_per_100g=values[
-                CARBOHYDRATE_NUTRIENT_ID
-            ],
-            fat_per_100g=values[
-                FAT_NUTRIENT_ID
-            ],
+            calories_per_100g=round(calories, 2),
+            protein_per_100g=round(protein, 2),
+            carbs_per_100g=round(carbs, 2),
+            fat_per_100g=round(fat, 2),
         )
 
     @staticmethod
