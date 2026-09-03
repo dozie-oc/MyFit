@@ -284,21 +284,46 @@ class ApiClient {
     return res;
   }
 
-  // ─────────────────────────────────────
+  // ─────────────────────────────────────────
   // HABITS
-  // ─────────────────────────────────────
+  // ─────────────────────────────────────────
 
-  static Future<List<dynamic>> getHabits() async {
-    return await get('/habits');
+  /// Returns all habits with embedded logs (last 35 days).
+  /// This is the primary endpoint — avoids N+1 log fetches.
+  static Future<List<dynamic>> getHabits([int days = 35]) async {
+    return await get('/habits', {'days': days.toString()});
   }
 
   static Future<Map<String, dynamic>> createHabit(
-      String name, String? description) async {
+    String name, {
+    String? description,
+    String? color,
+    int targetPerWeek = 7,
+  }) async {
     final res = await post('/habits', {
       'name': name,
-      if (description != null && description.isNotEmpty)
-        'description': description,
+      'description': ?description,
+      'color': ?color,
+      'target_per_week': targetPerWeek,
     });
+    notifyDataChanged();
+    return res;
+  }
+
+  static Future<Map<String, dynamic>> updateHabit(
+    int id, {
+    String? name,
+    String? description,
+    String? color,
+    int? targetPerWeek,
+  }) async {
+    final body = <String, dynamic>{
+      'name': ?name,
+      'description': ?description,
+      'color': ?color,
+      'target_per_week': ?targetPerWeek,
+    };
+    final res = await patch('/habits/$id', body);
     notifyDataChanged();
     return res;
   }
@@ -308,16 +333,28 @@ class ApiClient {
     notifyDataChanged();
   }
 
-  static Future<List<dynamic>> getHabitLogs(int habitId) async {
-    return await get('/habits/$habitId/logs');
-  }
-
   static Future<Map<String, dynamic>> logHabit(
       int habitId, String date, bool completed) async {
     final res = await post('/habits/$habitId/logs',
         {'date': date, 'completed': completed});
     notifyDataChanged();
     return res;
+  }
+
+  static Future<void> deleteHabitLog(int habitId, String date) async {
+    await delete('/habits/$habitId/logs/$date');
+    notifyDataChanged();
+  }
+
+  /// Returns per-day habit activity for activity ring rendering.
+  static Future<List<dynamic>> getHabitActivity({
+    String? dateFrom,
+    String? dateTo,
+  }) async {
+    final params = <String, String>{};
+    if (dateFrom != null) params['date_from'] = dateFrom;
+    if (dateTo != null) params['date_to'] = dateTo;
+    return await get('/habits/activity', params);
   }
 
   // ─────────────────────────────────────

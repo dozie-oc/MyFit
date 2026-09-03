@@ -278,6 +278,18 @@ class MealOut(BaseModel):
 # HABITS
 # ============================================================
 
+# Default palette — 8 distinct colours that work well as arc segments.
+HABIT_COLOR_PALETTE = [
+    "#6366F1",  # indigo
+    "#10B981",  # emerald
+    "#F59E0B",  # amber
+    "#EF4444",  # red
+    "#3B82F6",  # blue
+    "#EC4899",  # pink
+    "#8B5CF6",  # violet
+    "#14B8A6",  # teal
+]
+
 
 class HabitCreate(BaseModel):
     """Input required to create a habit."""
@@ -292,12 +304,51 @@ class HabitCreate(BaseModel):
         max_length=500,
     )
 
+    # Hex color; if omitted the backend assigns from the palette.
+    color: str | None = Field(
+        default=None,
+        max_length=9,
+    )
+
+    # Times-per-week target (1–7, default 7 = daily).
+    target_per_week: int = Field(
+        default=7,
+        ge=1,
+        le=7,
+    )
+
+
+class HabitUpdate(BaseModel):
+    """Partial update for an existing habit."""
+
+    name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+    )
+
+    description: str | None = Field(
+        default=None,
+        max_length=500,
+    )
+
+    color: str | None = Field(
+        default=None,
+        max_length=9,
+    )
+
+    target_per_week: int | None = Field(
+        default=None,
+        ge=1,
+        le=7,
+    )
+
 
 class HabitLogCreate(BaseModel):
     """Input for marking a habit as completed/not completed."""
 
     date: date
-    completed: bool
+    completed: bool = True
 
 
 class HabitOut(BaseModel):
@@ -309,10 +360,12 @@ class HabitOut(BaseModel):
     name: str
     description: str | None
     frequency: str
+    color: str
+    target_per_week: int
 
 
 class HabitLogOut(BaseModel):
-    """Public representation of a habit log."""
+    """Public representation of a habit log entry."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -320,6 +373,37 @@ class HabitLogOut(BaseModel):
     habit_id: int
     date: date
     completed: bool
+
+
+class HabitWithLogsOut(BaseModel):
+    """Habit plus its last 35 days of log entries (for calendar rendering)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: str | None
+    frequency: str
+    color: str
+    target_per_week: int
+    # All log entries for the last 35 days, ordered by date ascending.
+    logs: list[HabitLogOut] = Field(default_factory=list)
+
+
+class HabitActivityDay(BaseModel):
+    """
+    Per-date summary of habit activity used to render activity rings
+    on the home-page calendar.
+
+    completed_habit_ids  — IDs of habits completed on this date.
+    pending_habit_ids    — IDs of habits that are eligible but not yet done.
+    """
+
+    date: date
+    completed_habit_ids: list[int] = Field(default_factory=list)
+    pending_habit_ids: list[int] = Field(default_factory=list)
+
+
 
 
 # ============================================================

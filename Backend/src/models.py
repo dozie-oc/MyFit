@@ -90,10 +90,22 @@ class Habit(SQLModel, table=True):
         max_length=500,
     )
 
-    # MVP supports values such as:
-    # "daily", "weekly", etc.
-    # Validation of the supported values belongs in the schema/service
-    # layer rather than the database model.
+    # Hex color string, e.g. "#10B981".
+    # Assigned from a palette on creation; editable by the user.
+    color: str = Field(
+        default="#6366F1",
+        max_length=9,
+    )
+
+    # How many completions are required per ISO week (1–7).
+    # 7 = daily habit. 3 = three times a week.
+    target_per_week: int = Field(
+        default=7,
+        ge=1,
+        le=7,
+    )
+
+    # Kept for backward compatibility but superseded by target_per_week.
     frequency: str = Field(
         default="daily",
         max_length=20,

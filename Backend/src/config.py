@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # When the application is ready for production, this value can
     # be replaced with a PostgreSQL connection URL without requiring
     # changes to the application-level database logic.
-    database_url: str = "sqlite:///./fitness_tracker.db"
+    database_url: str = "sqlite:///./myfit.db"
 
     @field_validator("database_url")
     @classmethod

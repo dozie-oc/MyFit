@@ -13,7 +13,7 @@ from src.config import settings
 #
 # Local development:
 #
-#     DATABASE_URL=sqlite:///./fitness_tracker.db
+#     DATABASE_URL=sqlite:///./myfit.db
 #
 # Later, production can use a PostgreSQL URL without changing
 # application-level database logic.
