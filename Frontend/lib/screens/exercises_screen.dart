@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
+import '../main.dart' show TabActivatedNotifier;
 
 // ─────────────────────────────────────────
 // EXERCISES SCREEN
 // ─────────────────────────────────────────
 
 class ExercisesScreen extends StatefulWidget {
-  const ExercisesScreen({super.key});
+  final TabActivatedNotifier? tabNotifier;
+  const ExercisesScreen({super.key, this.tabNotifier});
 
   @override
   State<ExercisesScreen> createState() => _ExercisesScreenState();
@@ -23,21 +25,31 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
     super.initState();
     _future = ApiClient.getExercises();
     ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+    widget.tabNotifier?.addListener(_onTabActivated);
   }
 
   @override
   void dispose() {
     ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    widget.tabNotifier?.removeListener(_onTabActivated);
     super.dispose();
   }
 
   void _onDataChanged() {
-    if (mounted) {
-      setState(() => _future = ApiClient.getExercises());
-    }
+    _reload();
   }
 
-  void _reload() => setState(() => _future = ApiClient.getExercises());
+  void _onTabActivated() {
+    _reload();
+  }
+
+  void _reload() {
+    if (mounted) {
+      setState(() {
+        _future = ApiClient.getExercises();
+      });
+    }
+  }
 
   Future<void> _handleRefresh() async {
     _reload();
@@ -317,9 +329,11 @@ class _LogExerciseSheet extends StatefulWidget {
 class _LogExerciseSheetState extends State<_LogExerciseSheet> {
   final _nameCtrl = TextEditingController();
   final _minsCtrl = TextEditingController();
-  final _setsCtrl = TextEditingController(text: '3');
-  final _repsCtrl = TextEditingController(text: '10');
+  // Strength fields — default values only shown for strength category
+  final _setsCtrl = TextEditingController();
+  final _repsCtrl = TextEditingController();
   final _weightCtrl = TextEditingController();
+  // Cardio-only field
   final _distCtrl = TextEditingController();
 
   String _category = 'strength'; // 'strength', 'cardio', 'flexibility', 'other'
@@ -333,6 +347,9 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
   @override
   void initState() {
     super.initState();
+    // Strength defaults — only populated when category = strength
+    _setsCtrl.text = '3';
+    _repsCtrl.text = '10';
     _loadCatalog();
   }
 
@@ -367,11 +384,40 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
     if (d != null) setState(() => _date = d);
   }
 
+  void _switchCategory(String newCat) {
+    setState(() {
+      _category = newCat;
+      _selectedCatalogId = null;
+      // Clear fields that don't apply to the new category
+      if (newCat == 'strength') {
+        _setsCtrl.text = '3';
+        _repsCtrl.text = '10';
+        _minsCtrl.clear();
+        _distCtrl.clear();
+      } else {
+        // Non-strength: clear sets/reps/weight
+        _setsCtrl.clear();
+        _repsCtrl.clear();
+        _weightCtrl.clear();
+        if (newCat == 'flexibility') {
+          // Flexibility: also clear distance (not applicable)
+          _distCtrl.clear();
+          _intensity = 'low';
+        } else {
+          _intensity = 'moderate';
+        }
+      }
+    });
+  }
+
   void _selectCatalogItem(Map<String, dynamic> item) {
+    final cat = (item['category'] as String?)?.toLowerCase() ?? 'cardio';
+    if (cat != _category) {
+      _switchCategory(cat);
+    }
     setState(() {
       _selectedCatalogId = item['id'] as int;
       _nameCtrl.text = item['name'] as String;
-      _category = (item['category'] as String?)?.toLowerCase() ?? 'cardio';
     });
   }
 
@@ -383,15 +429,21 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
       return;
     }
 
-    final mins = int.tryParse(_minsCtrl.text);
-    final sets = int.tryParse(_setsCtrl.text);
-    final reps = int.tryParse(_repsCtrl.text);
-    final weight = double.tryParse(_weightCtrl.text);
-    final dist = double.tryParse(_distCtrl.text);
+    final mins = int.tryParse(_minsCtrl.text.trim());
+
+    // Only parse strength fields when category is strength
+    final isStrength = _category == 'strength';
+    final isCardio = _category == 'cardio';
+    final sets = isStrength ? int.tryParse(_setsCtrl.text.trim()) : null;
+    final reps = isStrength ? int.tryParse(_repsCtrl.text.trim()) : null;
+    final weight =
+        isStrength ? double.tryParse(_weightCtrl.text.trim()) : null;
+    final dist =
+        isCardio ? double.tryParse(_distCtrl.text.trim()) : null;
 
     setState(() => _saving = true);
     try {
-      await ApiClient.createExercise({
+      final body = <String, dynamic>{
         'date': _dateStr,
         'name': name,
         'category': _category,
@@ -402,7 +454,8 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
         'duration_minutes': ?mins,
         'distance_km': ?dist,
         'intensity': _intensity,
-      });
+      };
+      await ApiClient.createExercise(body);
       if (mounted) Navigator.pop(context, true);
     } on ApiException catch (e) {
       if (mounted) {
@@ -418,6 +471,8 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
   @override
   Widget build(BuildContext context) {
     final isStrength = _category == 'strength';
+    final isCardio = _category == 'cardio';
+    final isFlexibility = _category == 'flexibility';
 
     final filteredCatalog = _catalog.where((it) {
       final cat = (it['category'] as String?)?.toLowerCase() ?? '';
@@ -449,34 +504,41 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
                     fontSize: 18, fontWeight: FontWeight.w600)),
             const SizedBox(height: 16),
 
-            // Exercise Type Selector
-            Row(
+            // ── Category Selector ─────────────────
+            Wrap(
+              spacing: 8,
               children: [
                 ChoiceChip(
                   label: const Text('Strength'),
                   selected: _category == 'strength',
-                  onSelected: (_) => setState(() => _category = 'strength'),
+                  onSelected: (_) => _switchCategory('strength'),
                 ),
-                const SizedBox(width: 8),
                 ChoiceChip(
                   label: const Text('Cardio'),
                   selected: _category == 'cardio',
-                  onSelected: (_) => setState(() => _category = 'cardio'),
+                  onSelected: (_) => _switchCategory('cardio'),
                 ),
-                const SizedBox(width: 8),
                 ChoiceChip(
                   label: const Text('Flexibility'),
                   selected: _category == 'flexibility',
-                  onSelected: (_) => setState(() => _category = 'flexibility'),
+                  onSelected: (_) => _switchCategory('flexibility'),
+                ),
+                ChoiceChip(
+                  label: const Text('Other'),
+                  selected: _category == 'other',
+                  onSelected: (_) => _switchCategory('other'),
                 ),
               ],
             ),
             const SizedBox(height: 16),
 
-            // Catalogue Quick Picks
+            // ── Catalogue Quick Picks ─────────────
             if (filteredCatalog.isNotEmpty) ...[
               const Text('Popular Exercises',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280), fontWeight: FontWeight.w500)),
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF6B7280),
+                      fontWeight: FontWeight.w500)),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 6,
@@ -484,9 +546,13 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
                 children: filteredCatalog.take(8).map((catItem) {
                   final isSelected = _nameCtrl.text == catItem['name'];
                   return ActionChip(
-                    avatar: isSelected ? const Icon(Icons.check, size: 14) : null,
-                    label: Text(catItem['name'] as String, style: const TextStyle(fontSize: 12)),
-                    onPressed: () => _selectCatalogItem(catItem as Map<String, dynamic>),
+                    avatar: isSelected
+                        ? const Icon(Icons.check, size: 14)
+                        : null,
+                    label: Text(catItem['name'] as String,
+                        style: const TextStyle(fontSize: 12)),
+                    onPressed: () =>
+                        _selectCatalogItem(catItem as Map<String, dynamic>),
                   );
                 }).toList(),
               ),
@@ -502,34 +568,46 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
             ),
             const SizedBox(height: 16),
 
-            // Dynamic fields based on Strength vs Cardio
+            // ── STRENGTH fields ───────────────────
             if (isStrength) ...[
               Row(
                 children: [
                   Expanded(
                     child: TextField(
                       controller: _setsCtrl,
-                      decoration: const InputDecoration(labelText: 'Sets'),
+                      decoration:
+                          const InputDecoration(labelText: 'Sets'),
                       keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly
+                      ],
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: TextField(
                       controller: _repsCtrl,
-                      decoration: const InputDecoration(labelText: 'Reps / Set'),
+                      decoration: const InputDecoration(
+                          labelText: 'Reps / Set'),
                       keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly
+                      ],
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: TextField(
                       controller: _weightCtrl,
-                      decoration: const InputDecoration(labelText: 'Weight (kg)', hintText: 'Optional'),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))],
+                      decoration: const InputDecoration(
+                          labelText: 'Weight (kg)',
+                          hintText: 'Optional'),
+                      keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true),
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                            RegExp(r'[\d.]'))
+                      ],
                     ),
                   ),
                 ],
@@ -544,51 +622,81 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
                 keyboardType: TextInputType.number,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               ),
-            ] else ...[
+            ],
+
+            // ── CARDIO fields ─────────────────────
+            if (isCardio) ...[
               Row(
                 children: [
                   Expanded(
                     child: TextField(
                       controller: _minsCtrl,
-                      decoration: const InputDecoration(labelText: 'Duration (min) *'),
+                      decoration: const InputDecoration(
+                          labelText: 'Duration (min) *'),
                       keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly
+                      ],
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: TextField(
                       controller: _distCtrl,
-                      decoration: const InputDecoration(labelText: 'Distance (km)', hintText: 'Optional'),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))],
+                      decoration: const InputDecoration(
+                          labelText: 'Distance (km)',
+                          hintText: 'Optional'),
+                      keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true),
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                            RegExp(r'[\d.]'))
+                      ],
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 16),
+              _IntensityPicker(
+                value: _intensity,
+                onChanged: (v) => setState(() => _intensity = v),
+              ),
+            ],
+
+            // ── FLEXIBILITY fields ────────────────
+            if (isFlexibility) ...[
+              TextField(
+                controller: _minsCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Duration (min) *',
+                  hintText: 'e.g. 20 (minutes of stretching)',
+                ),
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              ),
+            ],
+
+            // ── OTHER fields ──────────────────────
+            if (!isStrength && !isCardio && !isFlexibility) ...[
               Row(
                 children: [
-                  const Text('Intensity: ', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-                  const SizedBox(width: 8),
-                  ChoiceChip(
-                    label: const Text('Low'),
-                    selected: _intensity == 'low',
-                    onSelected: (_) => setState(() => _intensity = 'low'),
-                  ),
-                  const SizedBox(width: 8),
-                  ChoiceChip(
-                    label: const Text('Moderate'),
-                    selected: _intensity == 'moderate',
-                    onSelected: (_) => setState(() => _intensity = 'moderate'),
-                  ),
-                  const SizedBox(width: 8),
-                  ChoiceChip(
-                    label: const Text('High'),
-                    selected: _intensity == 'high',
-                    onSelected: (_) => setState(() => _intensity = 'high'),
+                  Expanded(
+                    child: TextField(
+                      controller: _minsCtrl,
+                      decoration: const InputDecoration(
+                          labelText: 'Duration (min)'),
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly
+                      ],
+                    ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 16),
+              _IntensityPicker(
+                value: _intensity,
+                onChanged: (v) => setState(() => _intensity = v),
               ),
             ],
 
@@ -620,3 +728,43 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
     );
   }
 }
+
+// ─────────────────────────────────────────
+// INTENSITY PICKER (shared by cardio/other)
+// ─────────────────────────────────────────
+
+class _IntensityPicker extends StatelessWidget {
+  final String value;
+  final void Function(String) onChanged;
+  const _IntensityPicker({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Text('Intensity: ',
+            style:
+                TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+        const SizedBox(width: 8),
+        ChoiceChip(
+          label: const Text('Low'),
+          selected: value == 'low',
+          onSelected: (_) => onChanged('low'),
+        ),
+        const SizedBox(width: 8),
+        ChoiceChip(
+          label: const Text('Moderate'),
+          selected: value == 'moderate',
+          onSelected: (_) => onChanged('moderate'),
+        ),
+        const SizedBox(width: 8),
+        ChoiceChip(
+          label: const Text('High'),
+          selected: value == 'high',
+          onSelected: (_) => onChanged('high'),
+        ),
+      ],
+    );
+  }
+}
+

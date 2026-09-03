@@ -163,6 +163,13 @@ class ApiClient {
     return token;
   }
 
+  static Future<String> adminLogin() async {
+    final data = await post('/auth/admin-login', {});
+    final token = data['access_token'] as String;
+    await saveToken(token);
+    return token;
+  }
+
   static Future<Map<String, dynamic>> me() async {
     return await get('/auth/me');
   }

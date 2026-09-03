@@ -49,6 +49,29 @@ class AuthState extends ChangeNotifier {
     }
   }
 
+  Future<bool> adminLogin() async {
+    _loading = true;
+    _error = null;
+    notifyListeners();
+    try {
+      _token = await ApiClient.adminLogin();
+      _user = await ApiClient.me();
+      _loading = false;
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      _error = e.message;
+      _loading = false;
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _error = 'Connection failed: $e';
+      _loading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<bool> register({
     required String username,
     required String password,

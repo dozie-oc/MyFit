@@ -2,7 +2,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from src.database import create_db_and_tables
+from src.database import create_db_and_tables, engine
+from src.seed import seed_admin_and_dummy_data
+from sqlmodel import Session
 
 from src.auth.router import router as auth_router
 
@@ -16,9 +18,9 @@ from src.routers.foods import router as food_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-
     create_db_and_tables()
-
+    with Session(engine) as session:
+        seed_admin_and_dummy_data(session)
     yield
 
 

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../services/api_client.dart';
 import '../auth_state.dart';
 import '../theme.dart';
+import '../main.dart' show TabActivatedNotifier;
 
 // ─────────────────────────────────────────
 // PROFILE SCREEN
@@ -10,7 +11,8 @@ import '../theme.dart';
 
 class ProfileScreen extends StatefulWidget {
   final AuthState authState;
-  const ProfileScreen({super.key, required this.authState});
+  final TabActivatedNotifier? tabNotifier;
+  const ProfileScreen({super.key, required this.authState, this.tabNotifier});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -24,17 +26,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.initState();
     _future = _load();
     ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+    widget.tabNotifier?.addListener(_onTabActivated);
   }
 
   @override
   void dispose() {
     ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    widget.tabNotifier?.removeListener(_onTabActivated);
     super.dispose();
   }
 
   void _onDataChanged() {
+    _reload();
+  }
+
+  void _onTabActivated() {
+    _reload();
+  }
+
+  void _reload() {
     if (mounted) {
-      setState(() => _future = _load());
+      setState(() {
+        _future = _load();
+      });
     }
   }
 
@@ -52,7 +66,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _handleRefresh() async {
-    setState(() => _future = _load());
+    _reload();
     await _future;
   }
 
@@ -98,14 +112,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
           if (snap.hasError) {
             return ErrorView(
                 message: snap.error.toString(),
-                onRetry: () => setState(() => _future = _load()));
+                onRetry: _reload);
           }
           final d = snap.data!;
           return RefreshIndicator(
             onRefresh: _handleRefresh,
             child: _ProfileContent(
               data: d,
-              onReload: () => setState(() => _future = _load()),
+              onReload: _reload,
             ),
           );
         },

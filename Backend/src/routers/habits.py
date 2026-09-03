@@ -44,6 +44,7 @@ def _build_habit_with_logs(
         frequency=habit.frequency,
         color=habit.color,
         target_per_week=habit.target_per_week,
+        created_at=habit.created_at,
         logs=[
             HabitLogOut(
                 id=log.id,
@@ -92,6 +93,11 @@ def _compute_activity(
         pending_ids: list[int] = []
 
         for habit in habits:
+            # Do not consider this habit for days before it was created.
+            habit_start = habit.created_at.date()
+            if day < habit_start:
+                continue
+
             # Check completions for this habit in this ISO week
             # counting only days <= day (to reflect state as-of that day)
             wkey = (habit.id, *_iso_week_key(day))

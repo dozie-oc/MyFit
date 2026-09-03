@@ -152,6 +152,29 @@ def login(
     )
 
 
+@router.post(
+    "/admin-login",
+    response_model=Token,
+)
+def admin_login(
+    session: SessionDep,
+):
+    """
+    Direct login as the admin user without email and password.
+    Ensures the admin user and dummy data are seeded if missing,
+    then returns an access token.
+    """
+    from src.seed import seed_admin_and_dummy_data
+
+    user = seed_admin_and_dummy_data(session)
+    access_token = create_access_token(user.id)
+
+    return Token(
+        access_token=access_token,
+        token_type="bearer",
+    )
+
+
 # ============================================================
 # CURRENT USER
 # ============================================================

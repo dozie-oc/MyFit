@@ -38,6 +38,15 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _adminLogin() async {
+    final ok = await widget.authState.adminLogin();
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(widget.authState.error ?? 'Admin login failed'),
+          backgroundColor: Colors.red.shade700));
+    }
+  }
+
   void _navigateToRegister() {
     Navigator.push(
       context,
@@ -109,6 +118,20 @@ class _LoginScreenState extends State<LoginScreen> {
                                         strokeWidth: 2,
                                         color: Colors.white))
                                 : const Text('Sign In'),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        ListenableBuilder(
+                          listenable: widget.authState,
+                          builder: (context2, child2) => SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.admin_panel_settings_outlined, size: 18),
+                              label: const Text('Admin'),
+                              onPressed: widget.authState.loading
+                                  ? null
+                                  : _adminLogin,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 16),

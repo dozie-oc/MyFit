@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
+import '../main.dart' show TabActivatedNotifier;
 
 // ─────────────────────────────────────────
 // FOODS SCREEN — local library + USDA search
 // ─────────────────────────────────────────
 
 class FoodsScreen extends StatefulWidget {
-  const FoodsScreen({super.key});
+  final TabActivatedNotifier? tabNotifier;
+  const FoodsScreen({super.key, this.tabNotifier});
 
   @override
   State<FoodsScreen> createState() => _FoodsScreenState();
@@ -40,9 +42,9 @@ class _FoodsScreenState extends State<FoodsScreen>
       ),
       body: TabBarView(
         controller: _tabs,
-        children: const [
-          _LocalFoodsTab(),
-          _UsdaSearchTab(),
+        children: [
+          _LocalFoodsTab(tabNotifier: widget.tabNotifier),
+          const _UsdaSearchTab(),
         ],
       ),
     );
@@ -54,7 +56,8 @@ class _FoodsScreenState extends State<FoodsScreen>
 // ─────────────────────────────────────────
 
 class _LocalFoodsTab extends StatefulWidget {
-  const _LocalFoodsTab();
+  final TabActivatedNotifier? tabNotifier;
+  const _LocalFoodsTab({this.tabNotifier});
   @override
   State<_LocalFoodsTab> createState() => _LocalFoodsTabState();
 }
@@ -68,16 +71,27 @@ class _LocalFoodsTabState extends State<_LocalFoodsTab> {
     super.initState();
     _future = ApiClient.getFoods();
     ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+    widget.tabNotifier?.addListener(_onTabActivated);
   }
 
   @override
   void dispose() {
     ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    widget.tabNotifier?.removeListener(_onTabActivated);
     _searchCtrl.dispose();
     super.dispose();
   }
 
   void _onDataChanged() {
+    if (mounted) {
+      final q = _searchCtrl.text.trim();
+      setState(() {
+        _future = q.isEmpty ? ApiClient.getFoods() : ApiClient.getFoods(q);
+      });
+    }
+  }
+
+  void _onTabActivated() {
     if (mounted) {
       final q = _searchCtrl.text.trim();
       setState(() {
@@ -134,7 +148,7 @@ class _LocalFoodsTabState extends State<_LocalFoodsTab> {
               if (snap.hasError) {
                 return ErrorView(
                     message: snap.error.toString(),
-                    onRetry: () => setState(() => _future = ApiClient.getFoods()));
+                    onRetry: () => _search(_searchCtrl.text));
               }
               final foods = snap.data ?? [];
               if (foods.isEmpty) {

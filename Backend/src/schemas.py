@@ -362,6 +362,8 @@ class HabitOut(BaseModel):
     frequency: str
     color: str
     target_per_week: int
+    # Date portion of created_at — used by clients to hide pre-creation days.
+    created_at: datetime
 
 
 class HabitLogOut(BaseModel):
@@ -386,6 +388,8 @@ class HabitWithLogsOut(BaseModel):
     frequency: str
     color: str
     target_per_week: int
+    # Date portion of created_at — used by clients to hide pre-creation days.
+    created_at: datetime
     # All log entries for the last 35 days, ordered by date ascending.
     logs: list[HabitLogOut] = Field(default_factory=list)
 

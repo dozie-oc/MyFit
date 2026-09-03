@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
 import 'habits_screen.dart' show HabitActivityRing;
+import '../main.dart' show TabActivatedNotifier;
 
 // ─────────────────────────────────────────
 // DASHBOARD / HOME SCREEN
@@ -10,7 +11,8 @@ import 'habits_screen.dart' show HabitActivityRing;
 
 class DashboardScreen extends StatefulWidget {
   final Map<String, dynamic> user;
-  const DashboardScreen({super.key, required this.user});
+  final TabActivatedNotifier? tabNotifier;
+  const DashboardScreen({super.key, required this.user, this.tabNotifier});
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -26,16 +28,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _selectedDate = _stripTime(DateTime.now());
     _future = _load();
     ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+    widget.tabNotifier?.addListener(_onTabActivated);
   }
 
   @override
   void dispose() {
     ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    widget.tabNotifier?.removeListener(_onTabActivated);
     super.dispose();
   }
 
   void _onDataChanged() {
-    if (mounted) setState(() => _future = _load());
+    if (mounted) {
+      setState(() {
+        _future = _load();
+      });
+    }
+  }
+
+  void _onTabActivated() {
+    if (mounted) {
+      setState(() {
+        _selectedDate = _stripTime(DateTime.now());
+        _future = _load();
+      });
+    }
   }
 
   DateTime _stripTime(DateTime d) => DateTime(d.year, d.month, d.day);
@@ -75,7 +92,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _handleRefresh() async {
-    setState(() => _future = _load());
+    setState(() {
+      _future = _load();
+    });
     await _future;
   }
 
@@ -174,8 +193,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       : snap.hasError
                           ? ErrorView(
                               message: snap.error.toString(),
-                              onRetry: () =>
-                                  setState(() => _future = _load()))
+                              onRetry: _handleRefresh)
                           : _DashboardContent(
                               data: data!,
                               selectedDate: _selectedDate,
@@ -292,6 +310,16 @@ class _CalendarStripState extends State<_CalendarStrip> {
   }
 
   @override
+  void didUpdateWidget(_CalendarStrip old) {
+    super.didUpdateWidget(old);
+    if (old.selectedDate != widget.selectedDate) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollToSelected();
+      });
+    }
+  }
+
+  @override
   void dispose() {
     _scrollCtrl.dispose();
     super.dispose();
@@ -300,18 +328,17 @@ class _CalendarStripState extends State<_CalendarStrip> {
   DateTime _mondayOf(DateTime d) => d.subtract(Duration(days: d.weekday - 1));
 
   void _scrollToSelected() {
-    final diff = widget.selectedDate
-        .difference(_stripAnchor)
-        .inDays
-        .clamp(0, 99);
-    final targetOffset = (diff * _cellW) - 100.0;
-    if (_scrollCtrl.hasClients) {
-      _scrollCtrl.animateTo(
-        targetOffset.clamp(0.0, _scrollCtrl.position.maxScrollExtent),
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    }
+    if (!_scrollCtrl.hasClients) return;
+    final start = _stripAnchor.subtract(const Duration(days: 14));
+    final dayIndex = widget.selectedDate.difference(start).inDays;
+    final viewportW = _scrollCtrl.position.viewportDimension;
+    // Center the selected date cell in the viewport
+    final targetOffset = (dayIndex * _cellW) + (_cellW / 2) - (viewportW / 2);
+    _scrollCtrl.animateTo(
+      targetOffset.clamp(0.0, _scrollCtrl.position.maxScrollExtent),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
   }
 
   @override
@@ -327,7 +354,7 @@ class _CalendarStripState extends State<_CalendarStrip> {
         children: [
           const Divider(height: 1),
           SizedBox(
-            height: 72,
+            height: 84,
             child: Row(
               children: [
                 // Scroll area
@@ -336,7 +363,7 @@ class _CalendarStripState extends State<_CalendarStrip> {
                     controller: _scrollCtrl,
                     scrollDirection: Axis.horizontal,
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 8),
+                        horizontal: 8, vertical: 4),
                     itemCount: totalDays,
                     itemBuilder: (_, i) {
                       final d = start.add(Duration(days: i));
@@ -430,12 +457,14 @@ class _StripCell extends StatelessWidget {
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text(
               _dayLabels[date.weekday],
               style: TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w500,
+                height: 1.1,
                 color: isSelected
                     ? Theme.of(context).colorScheme.primary
                     : const Color(0xFF9CA3AF),
@@ -449,6 +478,7 @@ class _StripCell extends StatelessWidget {
                 fontWeight: isToday || isSelected
                     ? FontWeight.w700
                     : FontWeight.w500,
+                height: 1.1,
                 color: isSelected
                     ? Theme.of(context).colorScheme.primary
                     : isToday
@@ -690,11 +720,15 @@ class _MonthGrid extends StatelessWidget {
     final habitMaps =
         habits.whereType<Map<String, dynamic>>().toList();
 
+    // Fixed row height: 28px date circle + 3px gap + 18px ring = 49px + vertical padding
+    const double rowHeight = 52.0;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Column(
         children: List.generate(rows, (row) {
-          return Expanded(
+          return SizedBox(
+            height: rowHeight,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: List.generate(7, (col) {
@@ -715,7 +749,7 @@ class _MonthGrid extends StatelessWidget {
                   onTap: () => onSelectDate(d),
                   child: SizedBox(
                     width: 40,
-                    height: double.infinity,
+                    height: rowHeight,
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
+import '../main.dart' show TabActivatedNotifier;
 
 // ─────────────────────────────────────────
 // HABITS SCREEN — HabitKit-style
@@ -35,13 +36,24 @@ String _fmtDate(DateTime d) =>
 enum DayState { completed, eligible, targetMet, future }
 
 /// Compute the state of every day in a 35-day window for a single habit.
+/// Days before the habit's created_at are excluded (returned as null / not present).
 Map<String, DayState> _computeDayStates(
   Map<String, dynamic> habit,
-  DateTime windowStart,
+  DateTime gridStart,
   DateTime today,
 ) {
   final targetPerWeek = (habit['target_per_week'] as num?)?.toInt() ?? 7;
   final rawLogs = (habit['logs'] as List?) ?? [];
+
+  // Parse habit creation date — days before this are not applicable.
+  DateTime? habitCreatedAt;
+  final rawCreatedAt = habit['created_at'];
+  if (rawCreatedAt != null) {
+    final parsed = DateTime.tryParse(rawCreatedAt.toString());
+    if (parsed != null) {
+      habitCreatedAt = DateTime(parsed.year, parsed.month, parsed.day);
+    }
+  }
 
   // Build set of completed date strings
   final completedDates = <String>{};
@@ -54,14 +66,12 @@ Map<String, DayState> _computeDayStates(
   final result = <String, DayState>{};
 
   // Process week by week
-  // We iterate day by day and group into ISO weeks
   final Map<String, List<DateTime>> weekDays = {};
   for (int i = 0; i < 35; i++) {
-    final d = windowStart.add(Duration(days: i));
+    final d = gridStart.add(Duration(days: i));
     final ds = _fmtDate(d);
     final wk = _isoWeekKey(d);
     weekDays.putIfAbsent(wk, () => []).add(d);
-    // Initialize all as future
     result[ds] = DayState.future;
   }
 
@@ -72,6 +82,12 @@ Map<String, DayState> _computeDayStates(
     for (int di = 0; di < days.length; di++) {
       final d = days[di];
       final ds = _fmtDate(d);
+
+      // Days before habit creation are not applicable — leave as future (grey)
+      if (habitCreatedAt != null && d.isBefore(habitCreatedAt)) {
+        result[ds] = DayState.future;
+        continue;
+      }
 
       if (d.isAfter(today)) {
         result[ds] = DayState.future;
@@ -116,7 +132,8 @@ String _isoWeekKey(DateTime d) {
 // ─────────────────────────────────────────
 
 class HabitsScreen extends StatefulWidget {
-  const HabitsScreen({super.key});
+  final TabActivatedNotifier? tabNotifier;
+  const HabitsScreen({super.key, this.tabNotifier});
 
   @override
   State<HabitsScreen> createState() => _HabitsScreenState();
@@ -130,19 +147,31 @@ class _HabitsScreenState extends State<HabitsScreen> {
     super.initState();
     _future = ApiClient.getHabits();
     ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+    widget.tabNotifier?.addListener(_onTabActivated);
   }
 
   @override
   void dispose() {
     ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    widget.tabNotifier?.removeListener(_onTabActivated);
     super.dispose();
   }
 
   void _onDataChanged() {
-    if (mounted) setState(() => _future = ApiClient.getHabits());
+    _reload();
   }
 
-  void _reload() => setState(() => _future = ApiClient.getHabits());
+  void _onTabActivated() {
+    _reload();
+  }
+
+  void _reload() {
+    if (mounted) {
+      setState(() {
+        _future = ApiClient.getHabits();
+      });
+    }
+  }
 
   Future<void> _handleRefresh() async {
     _reload();
@@ -230,24 +259,28 @@ class _HabitCard extends StatefulWidget {
 
 class _HabitCardState extends State<_HabitCard> {
   late Map<String, DayState> _dayStates;
-  late DateTime _windowStart;
+  late DateTime _gridStart;
   late DateTime _today;
 
   @override
   void initState() {
     super.initState();
-    _today = DateTime.now();
-    _today = DateTime(_today.year, _today.month, _today.day);
-    _windowStart = _today.subtract(const Duration(days: 34));
-    _dayStates = _computeDayStates(widget.habit, _windowStart, _today);
+    _initGrid();
   }
 
   @override
   void didUpdateWidget(_HabitCard old) {
     super.didUpdateWidget(old);
-    if (old.habit != widget.habit) {
-      _dayStates = _computeDayStates(widget.habit, _windowStart, _today);
-    }
+    _initGrid();
+  }
+
+  void _initGrid() {
+    final now = DateTime.now();
+    _today = DateTime(now.year, now.month, now.day);
+    final mondayOfThisWeek =
+        _today.subtract(Duration(days: _today.weekday - 1));
+    _gridStart = mondayOfThisWeek.subtract(const Duration(days: 28));
+    _dayStates = _computeDayStates(widget.habit, _gridStart, _today);
   }
 
   Color get _habitColor =>
@@ -259,17 +292,29 @@ class _HabitCardState extends State<_HabitCard> {
     if (currentState == DayState.future) return;
 
     final habitId = widget.habit['id'] as int;
+
+    // Optimistic local update — flip state immediately for instant visual feedback.
+    final wasCompleted = currentState == DayState.completed;
+    setState(() {
+      _dayStates[ds] = wasCompleted ? DayState.eligible : DayState.completed;
+    });
+
     try {
-      if (currentState == DayState.completed) {
-        // Un-complete
+      if (wasCompleted) {
         await ApiClient.logHabit(habitId, ds, false);
       } else {
-        // Complete
         await ApiClient.logHabit(habitId, ds, true);
       }
-      // Reload from server to get correct week accounting
+      // Reload from server to get accurate week-target accounting across all habits.
       widget.onChanged();
-    } catch (_) {}
+    } catch (_) {
+      // Revert optimistic update on failure
+      if (mounted) {
+        setState(() {
+          _dayStates[ds] = currentState ?? DayState.eligible;
+        });
+      }
+    }
   }
 
   int _completedThisWeek() {
@@ -418,7 +463,7 @@ class _HabitCardState extends State<_HabitCard> {
 
               // ── 30-day mini calendar grid ────────────
               _HabitCalendarGrid(
-                windowStart: _windowStart,
+                gridStart: _gridStart,
                 today: _today,
                 dayStates: _dayStates,
                 color: color,
@@ -437,14 +482,14 @@ class _HabitCardState extends State<_HabitCard> {
 // ─────────────────────────────────────────
 
 class _HabitCalendarGrid extends StatelessWidget {
-  final DateTime windowStart;
+  final DateTime gridStart;
   final DateTime today;
   final Map<String, DayState> dayStates;
   final Color color;
   final void Function(DateTime) onTapDay;
 
   const _HabitCalendarGrid({
-    required this.windowStart,
+    required this.gridStart,
     required this.today,
     required this.dayStates,
     required this.color,
@@ -455,12 +500,6 @@ class _HabitCalendarGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     // Day-of-week headers (M T W T F S S)
     const headers = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-
-    // Compute day cells: 35 days starting from windowStart
-    // We always show 5 rows × 7 columns
-    // windowStart is _today - 34 days; align to Monday of that week
-    final gridStart = windowStart.subtract(
-        Duration(days: (windowStart.weekday - 1) % 7));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -494,8 +533,9 @@ class _HabitCalendarGrid extends StatelessWidget {
                 final ds = _fmtDate(d);
                 final state = dayStates[ds];
 
+                final canTap = !d.isAfter(today) && state != null;
                 return GestureDetector(
-                  onTap: state != null ? () => onTapDay(d) : null,
+                  onTap: canTap ? () => onTapDay(d) : null,
                   child: _DayCell(
                     day: d,
                     today: today,

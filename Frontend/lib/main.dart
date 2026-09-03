@@ -42,6 +42,14 @@ class MyFitApp extends StatelessWidget {
 // MAIN SHELL — bottom nav (6 tabs)
 // ─────────────────────────────────────────
 
+/// A simple notifier that fires whenever its tab becomes the active one.
+/// Each screen holds a reference to its own notifier and calls
+/// refresh() from its listener. This lets us trigger a fetch whenever
+/// the user switches to that tab, without requiring a full widget rebuild.
+class TabActivatedNotifier extends ChangeNotifier {
+  void activate() => notifyListeners();
+}
+
 class MainShell extends StatefulWidget {
   final AuthState authState;
   const MainShell({super.key, required this.authState});
@@ -53,7 +61,14 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
 
-  late final List<({String label, IconData icon, IconData activeIcon, Widget screen})> _tabs;
+  // One notifier per tab — fired when the user navigates to that tab.
+  final List<TabActivatedNotifier> _tabNotifiers = List.generate(
+    6,
+    (_) => TabActivatedNotifier(),
+  );
+
+  late final List<
+      ({String label, IconData icon, IconData activeIcon, Widget screen})> _tabs;
 
   @override
   void initState() {
@@ -63,39 +78,60 @@ class _MainShellState extends State<MainShell> {
         label: 'Today',
         icon: Icons.home_outlined,
         activeIcon: Icons.home,
-        screen: DashboardScreen(user: widget.authState.user ?? {}),
+        screen: DashboardScreen(
+          user: widget.authState.user ?? {},
+          tabNotifier: _tabNotifiers[0],
+        ),
       ),
       (
         label: 'Foods',
         icon: Icons.search_outlined,
         activeIcon: Icons.search,
-        screen: const FoodsScreen(),
+        screen: FoodsScreen(tabNotifier: _tabNotifiers[1]),
       ),
       (
         label: 'Meals',
         icon: Icons.restaurant_outlined,
         activeIcon: Icons.restaurant,
-        screen: const MealsScreen(),
+        screen: MealsScreen(tabNotifier: _tabNotifiers[2]),
       ),
       (
         label: 'Exercise',
         icon: Icons.fitness_center_outlined,
         activeIcon: Icons.fitness_center,
-        screen: const ExercisesScreen(),
+        screen: ExercisesScreen(tabNotifier: _tabNotifiers[3]),
       ),
       (
         label: 'Habits',
         icon: Icons.checklist_outlined,
         activeIcon: Icons.checklist,
-        screen: const HabitsScreen(),
+        screen: HabitsScreen(tabNotifier: _tabNotifiers[4]),
       ),
       (
         label: 'Profile',
         icon: Icons.person_outline,
         activeIcon: Icons.person,
-        screen: ProfileScreen(authState: widget.authState),
+        screen: ProfileScreen(
+          authState: widget.authState,
+          tabNotifier: _tabNotifiers[5],
+        ),
       ),
     ];
+  }
+
+  @override
+  void dispose() {
+    for (final n in _tabNotifiers) {
+      n.dispose();
+    }
+    super.dispose();
+  }
+
+  void _onTabSelected(int i) {
+    if (i == _index) return;
+    setState(() => _index = i);
+    // Notify the newly-active tab so its screen can re-fetch stale data.
+    _tabNotifiers[i].activate();
   }
 
   @override
@@ -107,7 +143,7 @@ class _MainShellState extends State<MainShell> {
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: _onTabSelected,
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         indicatorColor:
             Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),

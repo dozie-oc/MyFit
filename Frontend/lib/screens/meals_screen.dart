@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
+import '../main.dart' show TabActivatedNotifier;
 
 // ─────────────────────────────────────────
 // MEALS SCREEN
 // ─────────────────────────────────────────
 
 class MealsScreen extends StatefulWidget {
-  const MealsScreen({super.key});
+  final TabActivatedNotifier? tabNotifier;
+  const MealsScreen({super.key, this.tabNotifier});
 
   @override
   State<MealsScreen> createState() => _MealsScreenState();
@@ -22,21 +24,31 @@ class _MealsScreenState extends State<MealsScreen> {
     super.initState();
     _future = ApiClient.getMeals();
     ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+    widget.tabNotifier?.addListener(_onTabActivated);
   }
 
   @override
   void dispose() {
     ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    widget.tabNotifier?.removeListener(_onTabActivated);
     super.dispose();
   }
 
   void _onDataChanged() {
-    if (mounted) {
-      setState(() => _future = ApiClient.getMeals());
-    }
+    _reload();
   }
 
-  void _reload() => setState(() => _future = ApiClient.getMeals());
+  void _onTabActivated() {
+    _reload();
+  }
+
+  void _reload() {
+    if (mounted) {
+      setState(() {
+        _future = ApiClient.getMeals();
+      });
+    }
+  }
 
   Future<void> _handleRefresh() async {
     _reload();
