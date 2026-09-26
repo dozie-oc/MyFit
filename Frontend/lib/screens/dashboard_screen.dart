@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
 import 'habits_screen.dart' show HabitActivityRing;
+import 'recommendation_sheet.dart';
 import '../main.dart' show TabActivatedNotifier;
 
 // ─────────────────────────────────────────
@@ -75,11 +76,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
         dateFrom: _fmtDate(rangeStart),
         dateTo: _fmtDate(rangeEnd),
       ),
+      // Only fetch recommendation for today
+      _isToday(_selectedDate)
+          ? ApiClient.getTodayRecommendation()
+              .catchError((_) => <String, dynamic>{'has_recommendation': false, 'reason': ''})
+          : Future.value(<String, dynamic>{'has_recommendation': false, 'reason': ''}),
     ]);
 
     Map<String, dynamic> summary = {};
     if (results[0] is Map<String, dynamic>) {
       summary = results[0] as Map<String, dynamic>;
+    }
+
+    Map<String, dynamic> recommendation = {};
+    if (results[5] is Map<String, dynamic>) {
+      recommendation = results[5] as Map<String, dynamic>;
     }
 
     return _DashboardData(
@@ -88,7 +99,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       exercises: results[2] as List<dynamic>,
       habits: results[3] as List<dynamic>,
       activity: results[4] as List<dynamic>,
+      recommendation: recommendation,
     );
+  }
+
+  bool _isToday(DateTime d) {
+    final now = DateTime.now();
+    return d.year == now.year && d.month == now.month && d.day == now.day;
   }
 
   Future<void> _handleRefresh() async {
@@ -107,18 +124,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
+  String _greeting() {
+    final h = DateTime.now().hour;
+    final name = (widget.user['username'] as String? ?? 'User');
+    if (h >= 5 && h < 12) return 'Good morning, $name';
+    if (h >= 12 && h < 17) return 'Good afternoon, $name';
+    if (h >= 17 && h < 21) return 'Good evening, $name';
+    return 'Hey, $name';
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FA),
-      body: FutureBuilder<_DashboardData>(
-        future: _future,
-        builder: (context, snap) {
-          final data = snap.data;
-          final loading = snap.connectionState == ConnectionState.waiting &&
-              data == null;
+    return FutureBuilder<_DashboardData>(
+      future: _future,
+      builder: (context, snap) {
+        final data = snap.data;
+        final loading =
+            snap.connectionState == ConnectionState.waiting && data == null;
 
-          return CustomScrollView(
+        // Show FAB when user has logged something today and viewing today
+        final hasActivity = data != null &&
+            _isToday(_selectedDate) &&
+            (data.meals.isNotEmpty || data.exercises.isNotEmpty);
+
+        return Scaffold(
+          backgroundColor: const Color(0xFFF8F9FA),
+          floatingActionButton: hasActivity
+              ? const RecommendationFAB()
+              : null,
+          body: CustomScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
               // ── App bar + calendar strip ─────────────
@@ -143,7 +177,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'Hello, ${widget.user['username'] ?? 'User'}',
+                                  _greeting(),
                                   style: const TextStyle(
                                       fontSize: 16,
                                       fontWeight: FontWeight.w700,
@@ -201,9 +235,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
               ),
             ],
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -259,12 +293,14 @@ class _DashboardData {
   final List<dynamic> exercises;
   final List<dynamic> habits;
   final List<dynamic> activity;
+  final Map<String, dynamic> recommendation;
   const _DashboardData({
     required this.summary,
     required this.meals,
     required this.exercises,
     required this.habits,
     required this.activity,
+    this.recommendation = const {},
   });
 }
 
@@ -823,6 +859,13 @@ class _DashboardContent extends StatelessWidget {
   const _DashboardContent(
       {required this.data, required this.selectedDate});
 
+  bool get _isToday {
+    final now = DateTime.now();
+    return selectedDate.year == now.year &&
+        selectedDate.month == now.month &&
+        selectedDate.day == now.day;
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = data.summary;
@@ -839,8 +882,12 @@ class _DashboardContent extends StatelessWidget {
     final totalFat = data.meals.fold<double>(
         0, (acc, m) => acc + ((m['fat'] as num?)?.toDouble() ?? 0));
 
-    final isToday = selectedDate == DateTime(DateTime.now().year,
-        DateTime.now().month, DateTime.now().day);
+    final isToday = _isToday;
+    final nothingLoggedToday = isToday &&
+        data.meals.isEmpty &&
+        data.exercises.isEmpty;
+    final rec = data.recommendation;
+    final hasRec = rec['has_recommendation'] == true;
 
     return Column(
       children: [
@@ -887,6 +934,10 @@ class _DashboardContent extends StatelessWidget {
             ),
           ),
         ),
+
+        // ── Recommendation card (shown when nothing logged today) ──
+        if (nothingLoggedToday && hasRec)
+          _RecommendationCard(recommendation: rec),
 
         // ── Meals ─────────────────────────────────
         SectionHeader(
@@ -936,8 +987,86 @@ class _DashboardContent extends StatelessWidget {
         else
           ...data.exercises.map((e) => _ExerciseTile(exercise: e)),
 
-        const SizedBox(height: 32),
+        const SizedBox(height: 80),
       ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────
+// RECOMMENDATION CARD (shown when no data logged)
+// ─────────────────────────────────────────
+
+class _RecommendationCard extends StatelessWidget {
+  final Map<String, dynamic> recommendation;
+  const _RecommendationCard({required this.recommendation});
+
+  @override
+  Widget build(BuildContext context) {
+    final type = recommendation['type'] as String?;
+    final title = recommendation['title'] as String? ?? 'Today\'s recommendation';
+    final reason = recommendation['reason'] as String? ?? '';
+
+    final isExercise = type == 'exercise';
+    final accentColor = isExercise
+        ? const Color(0xFF10B981)
+        : const Color(0xFF2563EB);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => showRecommendationSheet(context),
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(color: accentColor, width: 4),
+              ),
+            ),
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: accentColor.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.auto_awesome_rounded,
+                    size: 20,
+                    color: accentColor,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title,
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 2),
+                      Text(
+                        reason,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF6B7280)),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(Icons.chevron_right_rounded,
+                    size: 18, color: accentColor),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

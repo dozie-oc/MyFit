@@ -545,3 +545,70 @@ class DailySummaryOut(BaseModel):
     calories_in: int
     calories_out: int
     net_calories: int
+
+
+# ============================================================
+# USER GOAL
+# ============================================================
+
+
+class UserGoalUpdate(BaseModel):
+    """Input for creating or updating the user's fitness goal."""
+
+    goal_type: str | None = Field(default=None, max_length=50)
+    target_weight: float | None = Field(default=None, gt=0)
+    target_date: date | None = None
+    activity_level: str | None = Field(default=None, max_length=50)
+    training_days_per_week: int | None = Field(default=None, ge=1, le=7)
+    training_experience: str | None = Field(default=None, max_length=50)
+    available_equipment: str | None = Field(default=None, max_length=200)
+    dietary_preference: str | None = Field(default=None, max_length=50)
+    foods_to_avoid: str | None = Field(default=None, max_length=300)
+
+
+class UserGoalOut(BaseModel):
+    """Public representation of the user's current fitness goal."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    goal_type: str | None = None
+    target_weight: float | None = None
+    target_date: date | None = None
+    activity_level: str | None = None
+    training_days_per_week: int | None = None
+    training_experience: str | None = None
+    available_equipment: str | None = None
+    dietary_preference: str | None = None
+    foods_to_avoid: str | None = None
+
+
+# ============================================================
+# RECOMMENDATIONS
+# ============================================================
+
+
+class RecommendationItem(BaseModel):
+    """A single food or exercise item within a recommendation."""
+
+    name: str
+    calories: float | None = None
+    protein: float | None = None
+    carbs: float | None = None
+    fat: float | None = None
+    # Exercise-specific
+    category: str | None = None
+    sets: int | None = None
+    reps: int | None = None
+    duration_minutes: int | None = None
+    description: str | None = None
+
+
+class RecommendationResponse(BaseModel):
+    """Response from the recommendation endpoint."""
+
+    has_recommendation: bool
+    type: str | None = None          # "meal" | "exercise" | "none"
+    title: str | None = None
+    reason: str
+    items: list[RecommendationItem] = Field(default_factory=list)
+

@@ -375,4 +375,29 @@ class ApiClient {
   static Future<Map<String, dynamic>> getSummary(String date) async {
     return await get('/summary/$date');
   }
+
+  // ─────────────────────────────────────────
+  // GOALS
+  // ─────────────────────────────────────────
+
+  static Future<Map<String, dynamic>> getGoal() async {
+    return await get('/goals');
+  }
+
+  static Future<Map<String, dynamic>> upsertGoal(
+      Map<String, dynamic> body) async {
+    final res = await post('/goals', body);
+    notifyDataChanged();
+    return res;
+  }
+
+  // ─────────────────────────────────────────
+  // RECOMMENDATIONS
+  // ─────────────────────────────────────────
+
+  static Future<Map<String, dynamic>> getTodayRecommendation([String? type]) async {
+    final params = <String, String>{};
+    if (type != null && type.isNotEmpty) params['type'] = type;
+    return await get('/recommendations/today', params);
+  }
 }

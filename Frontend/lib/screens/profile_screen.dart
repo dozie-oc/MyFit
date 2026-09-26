@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../services/api_client.dart';
 import '../auth_state.dart';
 import '../theme.dart';
+import 'goal_screen.dart';
 import '../main.dart' show TabActivatedNotifier;
 
 // ─────────────────────────────────────────
@@ -57,11 +58,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ApiClient.me(),
       ApiClient.getWeightLogs(),
       ApiClient.getAllSummaries(),
+      ApiClient.getGoal().catchError((_) => <String, dynamic>{}),
     ]);
     return _ProfileData(
       user: results[0] as Map<String, dynamic>,
       weightLogs: results[1] as List<dynamic>,
       summaries: results[2] as List<dynamic>,
+      goal: results[3] as Map<String, dynamic>,
     );
   }
 
@@ -132,10 +135,12 @@ class _ProfileData {
   final Map<String, dynamic> user;
   final List<dynamic> weightLogs;
   final List<dynamic> summaries;
+  final Map<String, dynamic> goal;
   const _ProfileData(
       {required this.user,
       required this.weightLogs,
-      required this.summaries});
+      required this.summaries,
+      this.goal = const {}});
 }
 
 class _ProfileContent extends StatefulWidget {
@@ -248,6 +253,23 @@ class _ProfileContentState extends State<_ProfileContent> {
           ),
         ),
         const Divider(height: 1),
+
+        // ── FITNESS GOAL ─────────────────────────────────────────
+        SectionHeader(
+          title: 'FITNESS GOAL',
+          trailing: TextButton.icon(
+            onPressed: () async {
+              final updated = await Navigator.push<bool>(
+                context,
+                MaterialPageRoute(builder: (_) => const GoalScreen()),
+              );
+              if (updated == true) widget.onReload();
+            },
+            icon: const Icon(Icons.edit_outlined, size: 14),
+            label: const Text('Edit', style: TextStyle(fontSize: 13)),
+          ),
+        ),
+        _GoalCard(goal: widget.data.goal),
 
         // ── Physical stats & Measurements Card ──────────────────
         SectionHeader(
@@ -772,6 +794,128 @@ class _QuickLogWeightSheetState extends State<_QuickLogWeightSheet> {
             ),
             const SizedBox(height: 8),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────
+// GOAL CARD
+// ─────────────────────────────────────────
+
+class _GoalCard extends StatelessWidget {
+  final Map<String, dynamic> goal;
+  const _GoalCard({required this.goal});
+
+  static const _goalLabels = {
+    'lose_weight': 'Lose Weight',
+    'gain_weight': 'Gain Weight',
+    'build_muscle': 'Build Muscle',
+    'maintain_weight': 'Maintain Weight',
+    'improve_fitness': 'Improve Fitness',
+    'improve_endurance': 'Improve Endurance',
+    'get_stronger': 'Get Stronger',
+  };
+
+  static const _activityLabels = {
+    'sedentary': 'Sedentary',
+    'lightly_active': 'Lightly Active',
+    'moderately_active': 'Moderately Active',
+    'very_active': 'Very Active',
+    'extremely_active': 'Extremely Active',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final goalType = goal['goal_type'] as String?;
+    final activityLevel = goal['activity_level'] as String?;
+    final trainingDays = goal['training_days_per_week'] as int?;
+    final experience = goal['training_experience'] as String?;
+    final dietPref = goal['dietary_preference'] as String?;
+    final targetWeight = goal['target_weight'];
+
+    final hasGoal = goalType != null;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: hasGoal
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            _goalLabels[goalType] ?? goalType,
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Theme.of(context).colorScheme.primary),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    if (activityLevel != null)
+                      InfoTile(
+                          label: 'Activity level',
+                          value: _activityLabels[activityLevel] ??
+                              activityLevel),
+                    if (trainingDays != null) ...[
+                      const Divider(height: 12),
+                      InfoTile(
+                          label: 'Training days/week',
+                          value: '$trainingDays days'),
+                    ],
+                    if (experience != null) ...[
+                      const Divider(height: 12),
+                      InfoTile(
+                          label: 'Experience',
+                          value: experience[0].toUpperCase() +
+                              experience.substring(1)),
+                    ],
+                    if (dietPref != null) ...[
+                      const Divider(height: 12),
+                      InfoTile(
+                          label: 'Diet',
+                          value: dietPref[0].toUpperCase() +
+                              dietPref.substring(1)),
+                    ],
+                    if (targetWeight != null) ...[
+                      const Divider(height: 12),
+                      InfoTile(
+                          label: 'Target weight',
+                          value: '${targetWeight}kg'),
+                    ],
+                  ],
+                )
+              : Column(
+                  children: [
+                    const Text(
+                        'No goal set yet.',
+                        style:
+                            TextStyle(color: Color(0xFF9CA3AF), fontSize: 13)),
+                    const SizedBox(height: 8),
+                    Text(
+                        'Tap Edit above to set your fitness goal and get personalised recommendations.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            color: Colors.grey.shade400, fontSize: 12)),
+                  ],
+                ),
         ),
       ),
     );

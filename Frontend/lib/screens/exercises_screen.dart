@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
+import 'recommendation_sheet.dart';
 import '../main.dart' show TabActivatedNotifier;
 
 // ─────────────────────────────────────────
@@ -78,6 +79,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
           ),
         ],
       ),
+      floatingActionButton: const RecommendationFAB(filterType: 'exercise'),
       body: Column(
         children: [
           // Category filter chips

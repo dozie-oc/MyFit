@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
+import 'recommendation_sheet.dart';
 import '../main.dart' show TabActivatedNotifier;
 
 // ─────────────────────────────────────────
@@ -73,6 +74,7 @@ class _MealsScreenState extends State<MealsScreen> {
           ),
         ],
       ),
+      floatingActionButton: const RecommendationFAB(filterType: 'meal'),
       body: FutureBuilder<List<dynamic>>(
         future: _future,
         builder: (context, snap) {

@@ -520,3 +520,57 @@ class Exercise(SQLModel, table=True):
     )
 
     deleted_at: datetime | None = None
+
+
+class UserGoal(SQLModel, table=True):
+    """
+    Fitness goal and profile metadata for a user.
+
+    One record per user (upserted). All fields are optional so that
+    existing users are not disrupted and the onboarding can be
+    completed incrementally.
+    """
+
+    __tablename__ = "usergoal"
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    user_id: int = Field(
+        foreign_key="user.id",
+        index=True,
+        unique=True,
+    )
+
+    # ── Fitness goal ──────────────────────────────────────────────
+    # lose_weight | gain_weight | build_muscle | maintain_weight
+    # | improve_fitness | improve_endurance | get_stronger
+    goal_type: str | None = Field(default=None, max_length=50)
+
+    target_weight: float | None = Field(default=None, gt=0)
+    target_date: Date | None = Field(default=None)
+
+    # ── Activity level ─────────────────────────────────────────────
+    # sedentary | lightly_active | moderately_active
+    # | very_active | extremely_active
+    activity_level: str | None = Field(default=None, max_length=50)
+
+    # ── Training details ─────────────────────────────────────────
+    # Days per week the user plans to train (1–7)
+    training_days_per_week: int | None = Field(default=None, ge=1, le=7)
+
+    # beginner | intermediate | advanced
+    training_experience: str | None = Field(default=None, max_length=50)
+
+    # Comma-separated list of available equipment, e.g.
+    # "barbell,dumbbell,bodyweight" or "none"
+    available_equipment: str | None = Field(default=None, max_length=200)
+
+    # ── Nutrition preferences ──────────────────────────────────────
+    # omnivore | vegetarian | vegan | pescatarian | other
+    dietary_preference: str | None = Field(default=None, max_length=50)
+
+    # Free-form list the user avoids, e.g. "gluten,dairy"
+    foods_to_avoid: str | None = Field(default=None, max_length=300)
+
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
