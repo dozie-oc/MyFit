@@ -55,6 +55,16 @@ def create_db_and_tables() -> None:
 
     SQLModel.metadata.create_all(engine)
 
+    # Backward compatibility for existing SQLite databases without Alembic:
+    # Ensure meal_type column exists on meal table with default 'snack'.
+    with engine.connect() as conn:
+        try:
+            from sqlalchemy import text
+            conn.execute(text("ALTER TABLE meal ADD COLUMN meal_type VARCHAR(20) DEFAULT 'snack'"))
+            conn.commit()
+        except Exception:
+            pass
+
     from src.models import ExerciseCatalogItem
     from sqlmodel import select
 

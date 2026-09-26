@@ -11,7 +11,8 @@ class GoalScreen extends StatefulWidget {
   /// When true, shows a "Get started →" button instead of Save and hides
   /// the back arrow (used during onboarding after registration).
   final bool isOnboarding;
-  const GoalScreen({super.key, this.isOnboarding = false});
+  final VoidCallback? onSaved;
+  const GoalScreen({super.key, this.isOnboarding = false, this.onSaved});
 
   @override
   State<GoalScreen> createState() => _GoalScreenState();
@@ -136,13 +137,13 @@ class _GoalScreenState extends State<GoalScreen> {
       };
       await ApiClient.upsertGoal(body);
       if (mounted) {
-        if (widget.isOnboarding) {
+        widget.onSaved?.call();
+        if (Navigator.of(context).canPop()) {
           Navigator.of(context).pop(true);
-        } else {
+        } else if (!widget.isOnboarding) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Goal saved!')),
           );
-          Navigator.of(context).pop(true);
         }
       }
     } catch (e) {

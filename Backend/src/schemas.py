@@ -210,11 +210,22 @@ class MealCreate(BaseModel):
     """Input required to create a meal."""
 
     date: date
-
+    meal_type: str = Field(
+        default="snack",
+        description="Type of meal: breakfast, lunch, dinner, snack",
+    )
     items: list[MealItemCreate] = Field(
         min_length=1,
         max_length=100,
     )
+
+    @field_validator("meal_type")
+    @classmethod
+    def validate_meal_type(cls, value: str) -> str:
+        val = value.strip().lower()
+        if val not in ("breakfast", "lunch", "dinner", "snack"):
+            return "snack"
+        return val
 
 
 class MealCaloriesOverride(BaseModel):
@@ -261,7 +272,7 @@ class MealOut(BaseModel):
 
     id: int
     date: date
-
+    meal_type: str = "snack"
     calories: float
     protein: float
     carbs: float
@@ -571,6 +582,7 @@ class UserGoalOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    id: int | None = None
     goal_type: str | None = None
     target_weight: float | None = None
     target_date: date | None = None
@@ -595,6 +607,12 @@ class RecommendationItem(BaseModel):
     protein: float | None = None
     carbs: float | None = None
     fat: float | None = None
+    # Food-specific
+    food_id: int | None = None
+    portion_id: int | None = None
+    quantity: float | None = None
+    unit: str | None = None
+    gram_weight: float | None = None
     # Exercise-specific
     category: str | None = None
     sets: int | None = None
@@ -610,5 +628,6 @@ class RecommendationResponse(BaseModel):
     type: str | None = None          # "meal" | "exercise" | "none"
     title: str | None = None
     reason: str
+    meal_type: str | None = None     # "breakfast" | "lunch" | "dinner" | "snack"
     items: list[RecommendationItem] = Field(default_factory=list)
 

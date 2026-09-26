@@ -417,9 +417,9 @@ class _RecommendationContent extends StatelessWidget {
           'date': dateStr,
           'name': name,
           'category': category,
-          'sets': ?sets,
-          'reps': ?reps,
-          'duration_minutes': ?duration,
+          if (sets != null) 'sets': sets,
+          if (reps != null) 'reps': reps,
+          if (duration != null) 'duration_minutes': duration,
           'intensity': 'moderate',
         });
         if (context.mounted) {
@@ -436,15 +436,70 @@ class _RecommendationContent extends StatelessWidget {
           );
         }
       }
-    } else if (type == 'meal') {
-      if (context.mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-                'Use the + button to add these foods to your meal log.'),
-          ),
-        );
+    } else if (type == 'meal' && items.isNotEmpty) {
+      try {
+        final today = DateTime.now();
+        final dateStr =
+            '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+
+        List<dynamic> allFoods = [];
+        final payloadItems = <Map<String, dynamic>>[];
+
+        for (final it in items) {
+          int? foodId = it['food_id'] as int?;
+          if (foodId == null) {
+            if (allFoods.isEmpty) {
+              allFoods = await ApiClient.getFoods();
+            }
+            final name = (it['name'] as String? ?? '').toLowerCase();
+            final match = allFoods.firstWhere(
+              (f) => (f['name'] as String? ?? '').toLowerCase() == name,
+              orElse: () => null,
+            );
+            if (match != null) {
+              foodId = match['id'] as int?;
+            }
+          }
+
+          if (foodId != null) {
+            final qty = (it['quantity'] as num?)?.toDouble() ??
+                (it['gram_weight'] as num?)?.toDouble() ??
+                100.0;
+            payloadItems.add({
+              'food_id': foodId,
+              'quantity': qty,
+              'unit': (it['unit'] as String?) ?? 'g',
+            });
+          }
+        }
+
+        if (payloadItems.isNotEmpty) {
+          final mealType = (data['meal_type'] as String?) ?? 'snack';
+          await ApiClient.createMeal({
+            'date': dateStr,
+            'meal_type': mealType,
+            'items': payloadItems,
+          });
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('${mealType.toUpperCase()} logged!')),
+            );
+            onRefresh();
+            Navigator.pop(context);
+          }
+        } else {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Could not match foods to log meal.')),
+            );
+          }
+        }
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e')),
+          );
+        }
       }
     }
   }

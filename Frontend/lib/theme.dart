@@ -72,7 +72,7 @@ class SectionHeader extends StatelessWidget {
                   color: Color(0xFF6B7280),
                   letterSpacing: 0.5)),
           const Spacer(),
-          ?trailing,
+          if (trailing != null) trailing!,
         ],
       ),
     );

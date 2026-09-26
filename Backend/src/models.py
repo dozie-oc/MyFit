@@ -328,6 +328,12 @@ class Meal(SQLModel, table=True):
 
     date: Date = Field(index=True)
 
+    meal_type: str = Field(
+        default="snack",
+        max_length=20,
+        description="Type of meal: breakfast, lunch, dinner, snack",
+    )
+
     calories: float = Field(ge=0)
     protein: float = Field(ge=0)
     carbs: float = Field(ge=0)

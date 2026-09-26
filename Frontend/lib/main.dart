@@ -8,6 +8,7 @@ import 'screens/meals_screen.dart';
 import 'screens/exercises_screen.dart';
 import 'screens/habits_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/goal_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,13 +26,27 @@ class MyFitApp extends StatelessWidget {
     return ListenableBuilder(
       listenable: authState,
       builder: (context, _) {
+        Widget homeWidget;
+        if (!authState.isLoggedIn) {
+          homeWidget = LoginScreen(authState: authState);
+        } else if (authState.checkingGoal) {
+          homeWidget = const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        } else if (!authState.hasGoal) {
+          homeWidget = GoalScreen(
+            isOnboarding: true,
+            onSaved: () => authState.markGoalCompleted(),
+          );
+        } else {
+          homeWidget = MainShell(authState: authState);
+        }
+
         return MaterialApp(
           title: 'MyFit',
           theme: appTheme,
           debugShowCheckedModeBanner: false,
-          home: authState.isLoggedIn
-              ? MainShell(authState: authState)
-              : LoginScreen(authState: authState),
+          home: homeWidget,
         );
       },
     );

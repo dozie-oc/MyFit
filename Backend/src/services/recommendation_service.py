@@ -1,14 +1,14 @@
 """
 Deterministic recommendation engine.
 
-Gathers the user's goal, today's meals, today's nutrition totals,
+Gathers the user's goal, profile, today's meals, today's nutrition totals,
 and today's exercises, then returns a single actionable recommendation
 (or a no-recommendation response when nothing useful can be suggested).
 
-No LLM, no ML model. Pure Python rule-based logic.
+No LLM, no ML model. Pure deterministic rule-based logic.
 """
 
-from datetime import date as Date, datetime, timezone
+from datetime import date as Date, datetime, timedelta, timezone
 from sqlmodel import Session, select
 
 from src.models import (
@@ -23,43 +23,44 @@ from src.schemas import RecommendationItem, RecommendationResponse
 
 
 # ──────────────────────────────────────────────────────────────────────
-# CONSTANTS
+# CONSTANTS & MAPPINGS
 # ──────────────────────────────────────────────────────────────────────
 
-# Estimated daily calorie targets by goal type.
-CALORIE_TARGETS: dict[str, int] = {
-    "lose_weight": 1600,
-    "gain_weight": 2800,
-    "build_muscle": 2500,
-    "maintain_weight": 2000,
-    "improve_fitness": 2000,
-    "improve_endurance": 2200,
-    "get_stronger": 2500,
+# Multipliers for estimated daily maintenance calories by activity level (kcal per kg bodyweight)
+ACTIVITY_CALORIE_MULTIPLIERS: dict[str, float] = {
+    "sedentary": 30.0,
+    "lightly_active": 32.0,
+    "moderately_active": 35.0,
+    "very_active": 38.0,
+    "extremely_active": 42.0,
 }
 
-# Estimated daily protein targets (grams) by goal type.
-PROTEIN_TARGETS: dict[str, int] = {
-    "lose_weight": 120,
-    "gain_weight": 150,
-    "build_muscle": 180,
-    "maintain_weight": 100,
-    "improve_fitness": 120,
-    "improve_endurance": 130,
-    "get_stronger": 160,
+# Calorie delta (relative to maintenance) by goal
+GOAL_CALORIE_DELTAS: dict[str, int] = {
+    "lose_weight": -450,
+    "gain_weight": 400,
+    "build_muscle": 350,
+    "get_stronger": 250,
+    "improve_endurance": 200,
+    "maintain_weight": 0,
+    "improve_fitness": 0,
 }
 
-# Default values when no goal is set.
-DEFAULT_CALORIE_TARGET = 2000
-DEFAULT_PROTEIN_TARGET = 100
+# Protein target (grams per kg bodyweight) by goal
+GOAL_PROTEIN_PER_KG: dict[str, float] = {
+    "lose_weight": 2.0,
+    "build_muscle": 2.0,
+    "gain_weight": 1.9,
+    "get_stronger": 1.8,
+    "improve_fitness": 1.5,
+    "improve_endurance": 1.5,
+    "maintain_weight": 1.4,
+}
 
-# How close to the daily target (fraction) before we stop recommending.
-CALORIE_DONE_FRACTION = 0.90
-PROTEIN_DONE_FRACTION = 0.85
+# Minimum remaining calories worth recommending a major meal for
+MIN_CALORIE_REMAINING = 180
 
-# Minimum remaining calories worth recommending a meal for.
-MIN_CALORIE_REMAINING = 200
-
-# Exercise categories to favour by goal.
+# Exercise categories to favour by goal
 GOAL_EXERCISE_CATEGORY: dict[str, list[str]] = {
     "lose_weight": ["cardio", "strength"],
     "gain_weight": ["strength"],
@@ -70,43 +71,127 @@ GOAL_EXERCISE_CATEGORY: dict[str, list[str]] = {
     "get_stronger": ["strength"],
 }
 
-# How many exercise sessions per day counts as "done".
-MAX_DAILY_EXERCISE_SESSIONS = 4
+# Equipment requirements per known catalog exercise
+EXERCISE_EQUIPMENT_MAP: dict[str, str] = {
+    # Barbell exercises
+    "bench press": "barbell",
+    "barbell squat": "barbell",
+    "deadlift": "barbell",
+    "overhead press": "barbell",
+    "barbell row": "barbell",
+    # Dumbbell exercises
+    "dumbbell curl": "dumbbell",
+    # Machine exercises
+    "leg press": "machines",
+    "rowing machine": "machines",
+    "elliptical": "machines",
+    # Bodyweight / none (compatible with any equipment)
+    "push-ups": "bodyweight",
+    "pull-ups": "bodyweight",
+    "dips": "bodyweight",
+    "plank": "bodyweight",
+    "running": "bodyweight",
+    "walking": "bodyweight",
+    "swimming": "bodyweight",
+    "jump rope": "bodyweight",
+    "hiit": "bodyweight",
+    "yoga": "bodyweight",
+    "pilates": "bodyweight",
+    "stretching": "bodyweight",
+}
+
+# Dietary classification keywords
+MEAT_POULTRY_KEYWORDS: set[str] = {
+    "chicken", "beef", "pork", "turkey", "bacon", "steak", "lamb", "duck",
+    "sausage", "ham", "veal", "meat"
+}
+SEAFOOD_KEYWORDS: set[str] = {
+    "fish", "salmon", "tuna", "shrimp", "seafood", "cod", "tilapia",
+    "trout", "crab", "lobster", "sardine", "mackerel"
+}
+DAIRY_EGG_KEYWORDS: set[str] = {
+    "egg", "yogurt", "milk", "cheese", "butter", "whey", "cream",
+    "casein", "mayonnaise"
+}
 
 
 # ──────────────────────────────────────────────────────────────────────
-# NUTRITION HELPERS
+# NUTRITION & TARGET HELPERS
 # ──────────────────────────────────────────────────────────────────────
 
-def _nutrition_per_100g(food: FoodItem, grams: float = 100.0) -> dict:
+def _calculate_targets(user: User, goal: UserGoal | None) -> tuple[int, int]:
+    """Calculate daily calorie and protein targets based on goal, weight, and activity level."""
+    weight_kg = user.weight or 70.0
+    weight_kg = max(40.0, min(weight_kg, 200.0))
+
+    activity = (goal.activity_level or "moderately_active").lower() if goal else "moderately_active"
+    multiplier = ACTIVITY_CALORIE_MULTIPLIERS.get(activity, 35.0)
+    maintenance_calories = weight_kg * multiplier
+
+    goal_type = (goal.goal_type or "maintain_weight").lower() if goal else "maintain_weight"
+    delta = GOAL_CALORIE_DELTAS.get(goal_type, 0)
+    calorie_target = int(max(1200, maintenance_calories + delta))
+
+    protein_factor = GOAL_PROTEIN_PER_KG.get(goal_type, 1.5)
+    protein_target = int(max(50, weight_kg * protein_factor))
+
+    return calorie_target, protein_target
+
+
+def _nutrition_per_grams(food: FoodItem, grams: float) -> dict[str, float]:
     factor = grams / 100.0
     return {
-        "calories": food.calories_per_100g * factor,
-        "protein": food.protein_per_100g * factor,
-        "carbs": food.carbs_per_100g * factor,
-        "fat": food.fat_per_100g * factor,
+        "calories": round(food.calories_per_100g * factor, 1),
+        "protein": round(food.protein_per_100g * factor, 1),
+        "carbs": round(food.carbs_per_100g * factor, 1),
+        "fat": round(food.fat_per_100g * factor, 1),
     }
 
 
-def _meal_label_from_time() -> str:
-    """
-    Return the expected next meal name based on current local time.
-    This is a rough heuristic – the recommendation logic is still
-    driven by remaining nutrition budget, not purely by time.
-    """
-    hour = datetime.now().hour
-    if hour < 11:
-        return "breakfast"
-    if hour < 15:
-        return "lunch"
-    if hour < 21:
-        return "dinner"
-    return "snack"
+def _is_food_allowed(food_name: str, dietary_pref: str, avoid_list: list[str]) -> bool:
+    lower = food_name.lower()
+    for avoid in avoid_list:
+        if avoid in lower:
+            return False
+
+    if dietary_pref == "vegan":
+        animal_keywords = MEAT_POULTRY_KEYWORDS | SEAFOOD_KEYWORDS | DAIRY_EGG_KEYWORDS
+        if any(kw in lower for kw in animal_keywords):
+            return False
+    elif dietary_pref == "vegetarian":
+        meat_fish = MEAT_POULTRY_KEYWORDS | SEAFOOD_KEYWORDS
+        if any(kw in lower for kw in meat_fish):
+            return False
+    elif dietary_pref == "pescatarian":
+        if any(kw in lower for kw in MEAT_POULTRY_KEYWORDS):
+            return False
+
+    return True
 
 
 # ──────────────────────────────────────────────────────────────────────
 # MEAL RECOMMENDATION
 # ──────────────────────────────────────────────────────────────────────
+
+def _determine_next_meal_type(today_meals: list[Meal]) -> str:
+    """
+    Determine the next meal based strictly on what the user has already logged today.
+    Breakfast -> Lunch -> Dinner -> Snack.
+    """
+    logged_types = {
+        m.meal_type.lower()
+        for m in today_meals
+        if getattr(m, "meal_type", None)
+    }
+
+    if "breakfast" not in logged_types:
+        return "breakfast"
+    if "lunch" not in logged_types:
+        return "lunch"
+    if "dinner" not in logged_types:
+        return "dinner"
+    return "snack"
+
 
 def _recommend_meal(
     session: Session,
@@ -117,119 +202,162 @@ def _recommend_meal(
     protein_remaining: float,
 ) -> RecommendationResponse:
     """
-    Pick suitable food items from the database as a meal recommendation.
-
-    Prioritisation:
-    - Muscle gain / weight gain: high-calorie, high-protein
-    - Weight loss: lean protein, low calorie
-    - Everything else: balanced
+    Pick a coherent meal combination (e.g. Rice + Chicken + Eggs) from the database
+    that fits the remaining nutritional budget and dietary preferences.
     """
+    next_meal = _determine_next_meal_type(today_meals)
+    goal_type = (goal.goal_type if goal else None) or "maintain_weight"
+    dietary_pref = (goal.dietary_preference or "").lower().strip() if goal else ""
+    avoid_str = (goal.foods_to_avoid or "").lower() if goal else ""
+    avoid_list = [a.strip() for a in avoid_str.split(",") if a.strip()]
 
-    goal_type = goal.goal_type if goal else None
-    dietary_pref = (goal.dietary_preference or "").lower() if goal else ""
-    avoid = (goal.foods_to_avoid or "").lower() if goal else ""
-    avoid_list = [a.strip() for a in avoid.split(",") if a.strip()] if avoid else []
-
-    # Load all non-deleted food items.
-    foods: list[FoodItem] = session.exec(
+    # Load all available active foods
+    all_foods: list[FoodItem] = session.exec(
         select(FoodItem).where(FoodItem.deleted_at.is_(None))
     ).all()
 
-    if not foods:
-        next_meal = _meal_label_from_time()
+    allowed_foods = [
+        f for f in all_foods
+        if _is_food_allowed(f.name, dietary_pref, avoid_list)
+    ]
+
+    if not allowed_foods:
         return RecommendationResponse(
             has_recommendation=True,
             type="meal",
-            title=f"Recommended {next_meal}",
+            title=f"Recommended {next_meal.capitalize()}",
+            meal_type=next_meal,
             reason=(
-                f"You still need approximately {int(cal_remaining)} kcal "
-                f"and {int(protein_remaining)}g of protein today. "
-                "Add some food items to the database to get personalised suggestions."
+                f"You still need approximately {int(cal_remaining)} kcal and {int(protein_remaining)}g of protein today. "
+                "No foods matching your dietary preferences were found in the database. Add foods to see suggestions!"
             ),
             items=[],
         )
 
-    # Filter out avoided foods.
-    def _is_allowed(f: FoodItem) -> bool:
-        name_lower = f.name.lower()
-        return not any(a in name_lower for a in avoid_list)
+    # Classify allowed foods into functional meal roles
+    def _find_food(keywords: list[str]) -> FoodItem | None:
+        for kw in keywords:
+            for f in allowed_foods:
+                if kw in f.name.lower():
+                    return f
+        return None
 
-    foods = [f for f in foods if _is_allowed(f)]
+    # Role definitions:
+    # Breakfast components
+    oatmeal_food = _find_food(["oatmeal", "oat", "porridge", "cereal"])
+    banana_food = _find_food(["banana", "apple", "berry", "fruit"])
+    yogurt_food = _find_food(["greek yogurt", "yogurt"])
+    egg_food = _find_food(["boiled egg", "egg"])
 
-    # Sort based on goal.
-    if goal_type in ("build_muscle", "gain_weight", "get_stronger"):
-        # Prioritise protein density (protein per calorie).
-        foods.sort(
-            key=lambda f: (
-                f.protein_per_100g / max(f.calories_per_100g, 1),
-                f.protein_per_100g,
-            ),
+    # Lunch/Dinner components
+    rice_food = _find_food(["brown rice", "rice", "quinoa", "potato", "pasta", "bread"])
+    chicken_food = _find_food(["chicken breast", "chicken", "turkey", "beef"])
+    salmon_food = _find_food(["salmon fillet", "salmon", "fish", "tuna"])
+    tofu_food = _find_food(["tofu", "beans", "lentils"])
+
+    selected_items: list[tuple[FoodItem, float, str]] = []  # (food, grams, description)
+    meal_calorie_cap = min(cal_remaining, 750.0)
+
+    if next_meal == "breakfast":
+        # Realistic breakfast combination: Oatmeal + Fruit + Yogurt/Egg
+        if oatmeal_food:
+            oat_g = 60.0 if cal_remaining < 400 else 100.0
+            selected_items.append((oatmeal_food, oat_g, f"{int(oat_g)}g bowl"))
+        if banana_food:
+            selected_items.append((banana_food, 118.0, "1 medium banana (118g)"))
+        if yogurt_food:
+            yog_g = 150.0 if cal_remaining > 350 else 100.0
+            selected_items.append((yogurt_food, yog_g, f"{int(yog_g)}g cup"))
+        elif egg_food:
+            selected_items.append((egg_food, 100.0, "2 boiled eggs (100g)"))
+    elif next_meal in ("lunch", "dinner"):
+        # Realistic lunch/dinner combination: Carb (Rice) + Protein (Chicken/Salmon/Tofu) + Side (Egg/Yogurt)
+        # Primary protein
+        main_protein = None
+        if dietary_pref in ("vegetarian", "vegan"):
+            main_protein = tofu_food or egg_food
+        elif dietary_pref == "pescatarian":
+            main_protein = salmon_food or egg_food
+        else:
+            main_protein = chicken_food or salmon_food or egg_food
+
+        # Carb base
+        carb_base = rice_food or oatmeal_food
+
+        if carb_base:
+            rice_g = 150.0 if cal_remaining < 500 else 200.0
+            selected_items.append((carb_base, rice_g, f"{int(rice_g)}g cooked"))
+        if main_protein:
+            prot_g = 120.0 if cal_remaining < 500 else 170.0
+            selected_items.append((main_protein, prot_g, f"{int(prot_g)}g serving"))
+        # Complementary side (e.g. Boiled Egg)
+        if egg_food and egg_food.id != (main_protein.id if main_protein else None) and cal_remaining >= 500:
+            selected_items.append((egg_food, 50.0, "1 large egg (50g)"))
+        elif yogurt_food and yogurt_food.id != (main_protein.id if main_protein else None) and cal_remaining >= 450:
+            selected_items.append((yogurt_food, 100.0, "100g serving"))
+    else:  # snack
+        # Lighter snack combination
+        if yogurt_food and banana_food and cal_remaining >= 250:
+            selected_items.append((yogurt_food, 150.0, "150g cup"))
+            selected_items.append((banana_food, 118.0, "1 medium banana"))
+        elif egg_food and cal_remaining >= 150:
+            selected_items.append((egg_food, 100.0, "2 boiled eggs (100g)"))
+        elif banana_food:
+            selected_items.append((banana_food, 118.0, "1 medium banana (118g)"))
+        elif yogurt_food:
+            selected_items.append((yogurt_food, 150.0, "150g cup"))
+
+    # Fallback if specific archetype foods were not found: pick top 1-3 allowed foods
+    if not selected_items:
+        # Sort allowed foods by protein density
+        allowed_foods.sort(
+            key=lambda f: f.protein_per_100g / max(f.calories_per_100g, 1),
             reverse=True,
         )
-    elif goal_type == "lose_weight":
-        # Prioritise lean foods: high protein, lower calories.
-        foods.sort(
-            key=lambda f: (
-                f.protein_per_100g / max(f.calories_per_100g, 1),
-                -f.calories_per_100g,
-            ),
-            reverse=True,
+        accum_cal = 0.0
+        for f in allowed_foods[:3]:
+            if accum_cal >= meal_calorie_cap:
+                break
+            serving_g = min(150.0, max(50.0, (meal_calorie_cap - accum_cal) / max(f.calories_per_100g, 1) * 100))
+            nutr = _nutrition_per_grams(f, serving_g)
+            selected_items.append((f, serving_g, f"{int(serving_g)}g serving"))
+            accum_cal += nutr["calories"]
+
+    # Build response items
+    items = []
+    total_meal_cal = 0.0
+    total_meal_protein = 0.0
+    for food, g, desc in selected_items:
+        nutr = _nutrition_per_grams(food, g)
+        total_meal_cal += nutr["calories"]
+        total_meal_protein += nutr["protein"]
+        items.append(
+            RecommendationItem(
+                name=food.name,
+                food_id=food.id,
+                calories=nutr["calories"],
+                protein=nutr["protein"],
+                carbs=nutr["carbs"],
+                fat=nutr["fat"],
+                quantity=g,
+                unit="g",
+                gram_weight=g,
+                description=desc,
+            )
         )
-    else:
-        # Balanced: decent protein, moderate calories.
-        foods.sort(
-            key=lambda f: f.protein_per_100g,
-            reverse=True,
-        )
 
-    # Pick up to 3 items whose combined calories fit what remains.
-    budget_cal = min(cal_remaining, 800)  # cap single meal budget
-    selected: list[tuple[FoodItem, float]] = []  # (food, grams)
-    accumulated_cal = 0.0
-    accumulated_protein = 0.0
-
-    for food in foods[:30]:  # consider top-30 most suitable
-        if len(selected) >= 3:
-            break
-        if food.calories_per_100g <= 0:
-            continue
-        # Choose a sensible serving (100–200g, or until budget hit).
-        serving_g = min(200.0, (budget_cal - accumulated_cal) / food.calories_per_100g * 100)
-        serving_g = max(50.0, serving_g)
-        n = _nutrition_per_100g(food, serving_g)
-        if accumulated_cal + n["calories"] > budget_cal + 50:
-            continue
-        selected.append((food, serving_g))
-        accumulated_cal += n["calories"]
-        accumulated_protein += n["protein"]
-
-    next_meal = _meal_label_from_time()
-
-    items = [
-        RecommendationItem(
-            name=food.name,
-            calories=round(_nutrition_per_100g(food, g)["calories"], 1),
-            protein=round(_nutrition_per_100g(food, g)["protein"], 1),
-            carbs=round(_nutrition_per_100g(food, g)["carbs"], 1),
-            fat=round(_nutrition_per_100g(food, g)["fat"], 1),
-            description=f"{int(g)}g serving",
-        )
-        for food, g in selected
-    ]
-
+    combo_names = " + ".join(f.name for f, _, _ in selected_items)
     reason = (
-        f"You still need approximately {int(cal_remaining)} kcal "
-        f"and {int(protein_remaining)}g of protein today."
+        f"Based on your '{goal_type.replace('_', ' ')}' goal and remaining budget "
+        f"({int(cal_remaining)} kcal, {int(protein_remaining)}g protein). "
+        f"Enjoy {combo_names} for a balanced {next_meal}."
     )
-    if goal_type in ("build_muscle", "gain_weight"):
-        reason += " Focus on protein-rich foods to support your goal."
-    elif goal_type == "lose_weight":
-        reason += " These lean options keep you within your calorie budget."
 
     return RecommendationResponse(
         has_recommendation=True,
         type="meal",
-        title=f"Recommended {next_meal}",
+        title=f"Recommended {next_meal.capitalize()}",
+        meal_type=next_meal,
         reason=reason,
         items=items,
     )
@@ -239,6 +367,44 @@ def _recommend_meal(
 # EXERCISE RECOMMENDATION
 # ──────────────────────────────────────────────────────────────────────
 
+def _is_exercise_equipment_compatible(
+    exercise_name: str,
+    user_equipment_set: set[str],
+) -> bool:
+    """Check if an exercise is compatible with the user's available equipment."""
+    if not user_equipment_set:
+        return True
+
+    lower = exercise_name.lower().strip()
+    req = EXERCISE_EQUIPMENT_MAP.get(lower)
+
+    if not req:
+        if "barbell" in lower:
+            req = "barbell"
+        elif "dumbbell" in lower:
+            req = "dumbbell"
+        elif "machine" in lower or "cable" in lower:
+            req = "machines"
+        else:
+            req = "bodyweight"
+
+    if req == "bodyweight":
+        return True
+
+    has_barbell = "barbell" in user_equipment_set
+    has_dumbbell = "dumbbell" in user_equipment_set or "dumbbells" in user_equipment_set
+    has_machines = "machines" in user_equipment_set or "machine" in user_equipment_set or "cables" in user_equipment_set
+
+    if req == "barbell" and has_barbell:
+        return True
+    if req == "dumbbell" and has_dumbbell:
+        return True
+    if req == "machines" and has_machines:
+        return True
+
+    return False
+
+
 def _recommend_exercise(
     session: Session,
     user: User,
@@ -246,38 +412,24 @@ def _recommend_exercise(
     today_exercises: list[Exercise],
 ) -> RecommendationResponse:
     """
-    Pick a catalog exercise the user hasn't done today.
-
-    Selection logic:
-    1. Determine which categories to recommend based on goal.
-    2. Exclude any exercises the user has already logged today.
-    3. Return the first suitable exercise from the catalog.
+    Pick a suitable catalog exercise compatible with equipment and goal,
+    excluding any exercises already logged today.
     """
-
     goal_type = (goal.goal_type if goal else None) or "improve_fitness"
     preferred_categories = GOAL_EXERCISE_CATEGORY.get(goal_type, ["cardio", "strength"])
-    experience = (goal.training_experience or "beginner") if goal else "beginner"
+    experience = (goal.training_experience or "beginner").lower() if goal else "beginner"
+
     equipment_str = (goal.available_equipment or "") if goal else ""
-    equipment = [e.strip().lower() for e in equipment_str.split(",") if e.strip()]
+    user_equipment = {e.strip().lower() for e in equipment_str.split(",") if e.strip()}
 
-    # Names (lowercase) of exercises already done today.
-    done_names = {e.name.lower() for e in today_exercises}
+    # Names of exercises already done today
+    done_names = {e.name.lower().strip() for e in today_exercises}
 
-    # Load entire catalog.
+    # Load full catalog
     catalog: list[ExerciseCatalogItem] = session.exec(
-        select(ExerciseCatalogItem).where(
-            ExerciseCatalogItem.deleted_at.is_(None)
-        )
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.deleted_at.is_(None))
     ).all()
 
-    # Filter by preferred category first, then fall back.
-    def _score(item: ExerciseCatalogItem) -> int:
-        if item.name.lower() in done_names:
-            return -1  # already done, skip
-        cat_score = preferred_categories.index(item.category) if item.category in preferred_categories else 99
-        return cat_score
-
-    eligible = [c for c in catalog if c.name.lower() not in done_names]
     if not catalog:
         return RecommendationResponse(
             has_recommendation=False,
@@ -285,24 +437,45 @@ def _recommend_exercise(
             reason="No exercises found in the catalog. Add exercises to get recommendations.",
             items=[],
         )
+
+    # Filter out exercises already completed today and incompatible equipment
+    eligible = [
+        item for item in catalog
+        if item.name.lower().strip() not in done_names
+        and _is_exercise_equipment_compatible(item.name, user_equipment)
+    ]
+
     if not eligible:
+        if done_names:
+            return RecommendationResponse(
+                has_recommendation=False,
+                type="none",
+                reason="You've already covered all available compatible exercises for today. Great work!",
+                items=[],
+            )
         return RecommendationResponse(
             has_recommendation=False,
             type="none",
-            reason="You've already covered all catalog exercises today. Great work!",
+            reason="No exercises in the catalog match your available equipment.",
             items=[],
         )
 
-    # Sort by category preference.
+    # Sort eligible by preference (preferred category first)
+    def _score(item: ExerciseCatalogItem) -> int:
+        cat_score = preferred_categories.index(item.category) if item.category in preferred_categories else 99
+        # Beginners favor bodyweight or foundational compound movements
+        if experience == "beginner":
+            if item.name.lower() in ("push-ups", "walking", "plank", "barbell squat", "bench press"):
+                return cat_score - 10
+        elif experience == "advanced":
+            if item.name.lower() in ("deadlift", "running", "overhead press", "barbell row", "hiit"):
+                return cat_score - 10
+        return cat_score
+
     eligible.sort(key=_score)
+    pick = eligible[0]
 
-    # Filter to preferred categories; if empty fall back to all.
-    preferred = [c for c in eligible if c.category in preferred_categories]
-    candidates = preferred if preferred else eligible
-
-    pick = candidates[0]
-
-    # Suggest sets/reps or duration based on category and experience.
+    # Suggest sets/reps or duration based on category and experience
     sets: int | None = None
     reps: int | None = None
     duration: int | None = None
@@ -322,7 +495,7 @@ def _recommend_exercise(
         else:
             duration = 45
     elif pick.category == "flexibility":
-        duration = 20
+        duration = 20 if experience == "beginner" else 30
 
     item = RecommendationItem(
         name=pick.name,
@@ -340,19 +513,19 @@ def _recommend_exercise(
         detail_parts.append(f"{duration} minutes")
     detail_str = " · ".join(detail_parts)
 
-    reason = f"Based on your '{goal_type.replace('_', ' ')}' goal"
+    reason = f"Based on your '{goal_type.replace('_', ' ')}' goal and {experience} experience"
     if done_names:
-        done_str = ", ".join(list(done_names)[:3])
-        reason += f". You've already done: {done_str}."
+        done_str = ", ".join(list(done_names)[:2])
+        reason += f" (already logged: {done_str})"
     else:
-        reason += ". You haven't exercised yet today."
+        reason += " — you haven't exercised yet today"
     if detail_str:
-        reason += f" Suggested: {detail_str}."
+        reason += f". Suggested: {detail_str}."
 
     return RecommendationResponse(
         has_recommendation=True,
         type="exercise",
-        title="Recommended exercise",
+        title="Recommended Exercise",
         reason=reason,
         items=[item],
     )
@@ -369,13 +542,16 @@ def get_recommendation(
     rec_type: str | None = None,
 ) -> RecommendationResponse:
     """
-    Main entry point.
+    Main recommendation endpoint logic.
 
-    Gathers context, applies rules, and returns a recommendation.
-    If rec_type is specified ('meal' or 'exercise'), returns a recommendation
-    specifically for that category.
+    Answers: "What is useful for me to do next today?"
+    Combines:
+    - User goal & profile (weight, activity level)
+    - Today's meals & meal types
+    - Today's calories and protein consumed vs target
+    - Today's exercises & training days per week
+    - Available equipment & dietary restrictions
     """
-
     if today is None:
         today = Date.today()
 
@@ -393,7 +569,6 @@ def get_recommendation(
         )
     ).all()
 
-    # ── Compute today's nutrition totals ────────────────────────
     total_cal = sum(m.calories for m in today_meals)
     total_protein = sum(m.protein for m in today_meals)
 
@@ -406,39 +581,58 @@ def get_recommendation(
         )
     ).all()
 
-    # ── Resolve targets ─────────────────────────────────────────
-    goal_type = (goal.goal_type if goal else None) or "maintain_weight"
-    cal_target = CALORIE_TARGETS.get(goal_type, DEFAULT_CALORIE_TARGET)
-    protein_target = PROTEIN_TARGETS.get(goal_type, DEFAULT_PROTEIN_TARGET)
+    # ── Target calculation ──────────────────────────────────────
+    cal_target, protein_target = _calculate_targets(user, goal)
+    cal_remaining = max(0.0, cal_target - total_cal)
+    protein_remaining = max(0.0, protein_target - total_protein)
 
-    # Adjust for body weight (rough BMR-based scaling).
-    weight_kg = user.weight or 70.0
-    if weight_kg > 0:
-        scale = weight_kg / 70.0
-        cal_target = int(cal_target * max(0.7, min(scale, 1.5)))
-        protein_target = int(protein_target * max(0.7, min(scale, 1.5)))
-
-    cal_remaining = cal_target - total_cal
-    protein_remaining = protein_target - total_protein
-
-    # ── Rule: Evaluate completion states ────────────────────────
+    # ── Completion states ────────────────────────────────────────
+    # Exercise completion: 1 or more logged sessions means user has exercised today
     sessions_today = len(today_exercises)
-    max_sessions = MAX_DAILY_EXERCISE_SESSIONS
+    exercise_done = sessions_today >= 1
 
-    cal_done = total_cal >= cal_target * CALORIE_DONE_FRACTION
-    protein_done = total_protein >= protein_target * PROTEIN_DONE_FRACTION
+    # Check weekly training frequency if training_days_per_week is set
+    training_days = goal.training_days_per_week if goal else None
+    if training_days and training_days < 7 and sessions_today == 0:
+        monday = today - timedelta(days=today.weekday())
+        week_exercises = session.exec(
+            select(Exercise).where(
+                Exercise.user_id == user.id,
+                Exercise.date >= monday,
+                Exercise.date <= today,
+                Exercise.deleted_at.is_(None),
+            )
+        ).all()
+        trained_days_this_week = len({e.date for e in week_exercises})
+        if trained_days_this_week >= training_days:
+            # User has already hit their training frequency this week on previous days!
+            exercise_done = True
+
+    # Nutrition completion: within 90% calories and 85% protein, or < 150 kcal remaining
+    cal_done = total_cal >= cal_target * 0.90 or cal_remaining < 150
+    protein_done = total_protein >= protein_target * 0.85
     nutrition_done = cal_done and protein_done
-    exercise_done = sessions_today >= max_sessions
 
     # ── Explicit type request handling ─────────────────────────
     if rec_type == "exercise":
-        if exercise_done:
+        if sessions_today >= 1:
+            ex_names = ", ".join(e.name for e in today_exercises)
             return RecommendationResponse(
                 has_recommendation=False,
                 type="none",
                 reason=(
-                    f"You have already completed {sessions_today} exercise sessions today. "
+                    f"You have already completed your workout today ({ex_names}). "
                     "Great work – make sure to rest and recover!"
+                ),
+                items=[],
+            )
+        if exercise_done and training_days:
+            return RecommendationResponse(
+                has_recommendation=False,
+                type="none",
+                reason=(
+                    f"You've already trained {training_days} days this week, hitting your weekly target! "
+                    "Today is a scheduled rest day."
                 ),
                 items=[],
             )
@@ -460,62 +654,52 @@ def get_recommendation(
         )
 
     # ── General recommendation (rec_type is None) ───────────────
-    # If both nutrition and exercise are complete:
+    # Case 1: Both nutrition and exercise are complete
     if nutrition_done and exercise_done:
         return RecommendationResponse(
             has_recommendation=False,
             type="none",
             reason=(
                 "You've hit your nutrition targets and completed your workout for today. "
-                "Great job – enjoy the rest of your day!"
+                "Great job – you're all set!"
             ),
         )
 
-    hour = datetime.now().hour
+    # Case 2: Nothing logged yet today
+    # Recommend starting the day with Breakfast!
+    logged_types = {
+        m.meal_type.lower()
+        for m in today_meals
+        if getattr(m, "meal_type", None)
+    }
 
-    # Late night wind-down (after 21:00):
-    if hour >= 21 and total_cal >= cal_target * 0.80:
-        if not exercise_done:
-            return _recommend_exercise(session, user, goal, today_exercises)
-        return RecommendationResponse(
-            has_recommendation=False,
-            type="none",
-            reason=(
-                "You're close to your daily calorie target for today. "
-                "Consider winding down and getting good sleep."
-            ),
+    if not today_meals and sessions_today == 0:
+        return _recommend_meal(
+            session, user, goal, today_meals, cal_remaining, protein_remaining
         )
 
-    # Prioritize exercise if no workout has been done today:
-    # Especially for workout-focused goals, or if breakfast/lunch has been had,
-    # or if it's mid-day.
-    is_training_goal = goal_type in (
-        "build_muscle",
-        "get_stronger",
-        "improve_endurance",
-        "improve_fitness",
-    )
+    # Case 3: Breakfast logged, but workout not completed yet
+    # Natural flow: eat breakfast -> do workout!
+    if "breakfast" in logged_types and not exercise_done:
+        return _recommend_exercise(session, user, goal, today_exercises)
 
-    if not exercise_done:
-        if sessions_today == 0:
-            # If user has logged at least one meal, workout is naturally next
-            if len(today_meals) > 0:
-                return _recommend_exercise(session, user, goal, today_exercises)
-            # If it's daytime (10:00 - 20:00) and user has a training-focused goal
-            if is_training_goal and hour >= 10:
-                return _recommend_exercise(session, user, goal, today_exercises)
+    # Case 4: Exercise done, next meal needed
+    if exercise_done and not nutrition_done and cal_remaining >= MIN_CALORIE_REMAINING:
+        return _recommend_meal(
+            session, user, goal, today_meals, cal_remaining, protein_remaining
+        )
 
-    # If nutrition not done and calories remain, recommend meal
+    # Case 5: Nutrition not done, calories remain
     if not nutrition_done and cal_remaining >= MIN_CALORIE_REMAINING:
         return _recommend_meal(
             session, user, goal, today_meals, cal_remaining, protein_remaining
         )
 
-    # If nutrition is done, but exercise remains
+    # Case 6: Nutrition is done, but exercise remains
     if not exercise_done:
         return _recommend_exercise(session, user, goal, today_exercises)
 
-    # Default: everything looks good
+    # Default fallback: on track
     return RecommendationResponse(
         has_recommendation=False,
         type="none",

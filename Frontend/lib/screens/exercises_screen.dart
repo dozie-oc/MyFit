@@ -449,12 +449,12 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
         'date': _dateStr,
         'name': name,
         'category': _category,
-        'exercise_catalog_id': ?_selectedCatalogId,
-        'sets': ?sets,
-        'reps': ?reps,
-        'weight_kg': ?weight,
-        'duration_minutes': ?mins,
-        'distance_km': ?dist,
+        if (_selectedCatalogId != null) 'exercise_catalog_id': _selectedCatalogId,
+        if (sets != null) 'sets': sets,
+        if (reps != null) 'reps': reps,
+        if (weight != null) 'weight_kg': weight,
+        if (mins != null) 'duration_minutes': mins,
+        if (dist != null) 'distance_km': dist,
         'intensity': _intensity,
       };
       await ApiClient.createExercise(body);

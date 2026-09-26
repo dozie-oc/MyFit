@@ -67,6 +67,7 @@ def build_meal_response(
     return MealOut(
         id=meal.id,
         date=meal.date,
+        meal_type=getattr(meal, "meal_type", "snack") or "snack",
         calories=meal.calories,
         protein=meal.protein,
         carbs=meal.carbs,
@@ -146,6 +147,7 @@ def create_meal(
     meal = Meal(
         user_id=current_user.id,
         date=meal_data.date,
+        meal_type=meal_data.meal_type or "snack",
         calories=0,
         protein=0,
         carbs=0,

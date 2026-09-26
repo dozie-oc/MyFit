@@ -144,6 +144,8 @@ class _MealCard extends StatelessWidget {
       itemSummary = 'No food items';
     }
 
+    final mealType = (meal['meal_type'] as String? ?? 'snack').toUpperCase();
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
       child: Card(
@@ -157,6 +159,22 @@ class _MealCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        mealType,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     Text(date,
                         style: const TextStyle(
                             fontWeight: FontWeight.w600, fontSize: 14)),
@@ -228,9 +246,11 @@ class _MealDetailSheet extends StatelessWidget {
           const SizedBox(height: 16),
           Row(
             children: [
-              Text(meal['date'] as String? ?? '',
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w600)),
+              Text(
+                '${(meal['meal_type'] as String? ?? 'snack').toUpperCase()} · ${meal['date'] as String? ?? ''}',
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600),
+              ),
               const Spacer(),
               IconButton(
                 icon: const Icon(Icons.delete_outline,
@@ -300,8 +320,24 @@ class _AddMealScreen extends StatefulWidget {
 
 class _AddMealScreenState extends State<_AddMealScreen> {
   DateTime _date = DateTime.now();
+  String _mealType = 'breakfast';
   final List<Map<String, dynamic>> _items = [];
   bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final hour = DateTime.now().hour;
+    if (hour < 11) {
+      _mealType = 'breakfast';
+    } else if (hour < 16) {
+      _mealType = 'lunch';
+    } else if (hour < 21) {
+      _mealType = 'dinner';
+    } else {
+      _mealType = 'snack';
+    }
+  }
 
   Future<void> _pickDate() async {
     final d = await showDatePicker(
@@ -344,7 +380,11 @@ class _AddMealScreenState extends State<_AddMealScreen> {
         };
       }).toList();
 
-      await ApiClient.createMeal({'date': _dateStr, 'items': payloadItems});
+      await ApiClient.createMeal({
+        'date': _dateStr,
+        'meal_type': _mealType,
+        'items': payloadItems,
+      });
       if (mounted) Navigator.pop(context, true);
     } on ApiException catch (e) {
       if (mounted) {
@@ -382,6 +422,22 @@ class _AddMealScreenState extends State<_AddMealScreen> {
             onPressed: _pickDate,
             icon: const Icon(Icons.calendar_today, size: 16),
             label: Text('Date: $_dateStr'),
+          ),
+          const SizedBox(height: 16),
+          const Text('Meal Type',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+          const SizedBox(height: 8),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'breakfast', label: Text('Breakfast')),
+              ButtonSegment(value: 'lunch', label: Text('Lunch')),
+              ButtonSegment(value: 'dinner', label: Text('Dinner')),
+              ButtonSegment(value: 'snack', label: Text('Snack')),
+            ],
+            selected: {_mealType},
+            onSelectionChanged: (newVal) {
+              setState(() => _mealType = newVal.first);
+            },
           ),
           const SizedBox(height: 20),
           Row(

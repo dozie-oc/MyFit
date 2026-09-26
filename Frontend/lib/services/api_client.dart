@@ -179,8 +179,8 @@ class ApiClient {
     double? height,
   }) async {
     final body = <String, dynamic>{
-      'weight': ?weight,
-      'height': ?height,
+      if (weight != null) 'weight': weight,
+      if (height != null) 'height': height,
     };
     final data = await patch('/auth/measurements', body);
     notifyDataChanged();
@@ -309,8 +309,8 @@ class ApiClient {
   }) async {
     final res = await post('/habits', {
       'name': name,
-      'description': ?description,
-      'color': ?color,
+      if (description != null) 'description': description,
+      if (color != null) 'color': color,
       'target_per_week': targetPerWeek,
     });
     notifyDataChanged();
@@ -325,10 +325,10 @@ class ApiClient {
     int? targetPerWeek,
   }) async {
     final body = <String, dynamic>{
-      'name': ?name,
-      'description': ?description,
-      'color': ?color,
-      'target_per_week': ?targetPerWeek,
+      if (name != null) 'name': name,
+      if (description != null) 'description': description,
+      if (color != null) 'color': color,
+      if (targetPerWeek != null) 'target_per_week': targetPerWeek,
     };
     final res = await patch('/habits/$id', body);
     notifyDataChanged();

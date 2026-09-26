@@ -7,10 +7,33 @@ class AuthState extends ChangeNotifier {
   bool _loading = false;
   String? _error;
 
+  bool _hasGoal = true;
+  bool _checkingGoal = false;
+
   bool get isLoggedIn => _token != null;
   Map<String, dynamic>? get user => _user;
   bool get loading => _loading;
   String? get error => _error;
+  bool get hasGoal => _hasGoal;
+  bool get checkingGoal => _checkingGoal;
+
+  Future<void> checkGoal() async {
+    _checkingGoal = true;
+    try {
+      final goal = await ApiClient.getGoal();
+      _hasGoal = goal['id'] != null ||
+          (goal['goal_type'] != null && goal['goal_type'].toString().isNotEmpty);
+    } catch (_) {
+      _hasGoal = true;
+    } finally {
+      _checkingGoal = false;
+    }
+  }
+
+  void markGoalCompleted() {
+    _hasGoal = true;
+    notifyListeners();
+  }
 
   // Restore session on app start
   Future<void> restore() async {
@@ -18,6 +41,7 @@ class AuthState extends ChangeNotifier {
     if (_token != null) {
       try {
         _user = await ApiClient.me();
+        await checkGoal();
       } catch (_) {
         _token = null;
         await ApiClient.clearToken();
@@ -33,6 +57,7 @@ class AuthState extends ChangeNotifier {
     try {
       _token = await ApiClient.login(username, password);
       _user = await ApiClient.me();
+      await checkGoal();
       _loading = false;
       notifyListeners();
       return true;
@@ -56,6 +81,7 @@ class AuthState extends ChangeNotifier {
     try {
       _token = await ApiClient.adminLogin();
       _user = await ApiClient.me();
+      await checkGoal();
       _loading = false;
       notifyListeners();
       return true;
@@ -108,6 +134,8 @@ class AuthState extends ChangeNotifier {
     await ApiClient.clearToken();
     _token = null;
     _user = null;
+    _hasGoal = true;
+    _checkingGoal = false;
     notifyListeners();
   }
 
