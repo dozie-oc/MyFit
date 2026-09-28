@@ -140,17 +140,18 @@ class ApiClient {
   static Future<Map<String, dynamic>> register({
     required String username,
     required String password,
-    required double weight,
-    required double height,
-    required String birthdate,
+    double? weight,
+    double? height,
+    String? birthdate,
   }) async {
-    return await post('/auth/register', {
+    final body = <String, dynamic>{
       'username': username,
       'password': password,
-      'weight': weight,
-      'height': height,
-      'birthdate': birthdate,
-    });
+      if (weight != null) 'weight': weight,
+      if (height != null) 'height': height,
+      if (birthdate != null) 'birthdate': birthdate,
+    };
+    return await post('/auth/register', body);
   }
 
   static Future<String> login(String username, String password) async {
@@ -177,10 +178,12 @@ class ApiClient {
   static Future<Map<String, dynamic>> updateMeasurements({
     double? weight,
     double? height,
+    String? birthdate,
   }) async {
     final body = <String, dynamic>{
       if (weight != null) 'weight': weight,
       if (height != null) 'height': height,
+      if (birthdate != null) 'birthdate': birthdate,
     };
     final data = await patch('/auth/measurements', body);
     notifyDataChanged();

@@ -168,17 +168,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
   final _userCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
-  final _weightCtrl = TextEditingController();
-  final _heightCtrl = TextEditingController();
+  final _confirmPassCtrl = TextEditingController();
   bool _obscure = true;
-  DateTime _birthdate = DateTime(1995, 1, 1);
+  bool _obscureConfirm = true;
 
   @override
   void dispose() {
     _userCtrl.dispose();
     _passCtrl.dispose();
-    _weightCtrl.dispose();
-    _heightCtrl.dispose();
+    _confirmPassCtrl.dispose();
     super.dispose();
   }
 
@@ -187,26 +185,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final ok = await widget.authState.register(
       username: _userCtrl.text.trim(),
       password: _passCtrl.text,
-      weight: double.parse(_weightCtrl.text),
-      height: double.parse(_heightCtrl.text),
-      birthdate:
-          '${_birthdate.year}-${_birthdate.month.toString().padLeft(2, '0')}-${_birthdate.day.toString().padLeft(2, '0')}',
     );
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(widget.authState.error ?? 'Registration failed'),
           backgroundColor: Colors.red.shade700));
+    } else if (ok && mounted) {
+      // Return back to root where authState listenable will display onboarding GoalScreen
+      Navigator.of(context).popUntil((route) => route.isFirst);
     }
-  }
-
-  Future<void> _pickDate() async {
-    final d = await showDatePicker(
-      context: context,
-      initialDate: _birthdate,
-      firstDate: DateTime(1920),
-      lastDate: DateTime.now().subtract(const Duration(days: 365 * 10)),
-    );
-    if (d != null) setState(() => _birthdate = d);
   }
 
   @override
@@ -253,47 +240,28 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           v == null || v.length < 8 ? 'Min 8 characters' : null,
                     ),
                     const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextFormField(
-                            controller: _weightCtrl,
-                            decoration:
-                                const InputDecoration(labelText: 'Weight (kg)'),
-                            keyboardType: TextInputType.number,
-                            inputFormatters: [
-                              FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))
-                            ],
-                            validator: (v) {
-                              final n = double.tryParse(v ?? '');
-                              return n == null || n <= 0 ? 'Enter weight' : null;
-                            },
-                          ),
+                    TextFormField(
+                      controller: _confirmPassCtrl,
+                      obscureText: _obscureConfirm,
+                      decoration: InputDecoration(
+                        labelText: 'Confirm Password',
+                        suffixIcon: IconButton(
+                          icon: Icon(_obscureConfirm
+                              ? Icons.visibility_off
+                              : Icons.visibility),
+                          onPressed: () =>
+                              setState(() => _obscureConfirm = !_obscureConfirm),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: TextFormField(
-                            controller: _heightCtrl,
-                            decoration:
-                                const InputDecoration(labelText: 'Height (cm)'),
-                            keyboardType: TextInputType.number,
-                            inputFormatters: [
-                              FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))
-                            ],
-                            validator: (v) {
-                              final n = double.tryParse(v ?? '');
-                              return n == null || n <= 0 ? 'Enter height' : null;
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    OutlinedButton.icon(
-                      onPressed: _pickDate,
-                      icon: const Icon(Icons.calendar_today, size: 16),
-                      label: Text(
-                          'Birthdate: ${_birthdate.year}-${_birthdate.month.toString().padLeft(2, '0')}-${_birthdate.day.toString().padLeft(2, '0')}'),
+                      ),
+                      validator: (v) {
+                        if (v == null || v.isEmpty) {
+                          return 'Please confirm your password';
+                        }
+                        if (v != _passCtrl.text) {
+                          return 'Passwords do not match';
+                        }
+                        return null;
+                      },
                     ),
                     const SizedBox(height: 24),
                     ListenableBuilder(

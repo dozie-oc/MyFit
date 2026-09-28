@@ -23,6 +23,11 @@ class _GoalScreenState extends State<GoalScreen> {
   bool _saving = false;
   String? _error;
 
+  // ── Profile / Measurement fields ─────────────────────
+  final _weightCtrl = TextEditingController();
+  final _heightCtrl = TextEditingController();
+  DateTime? _birthdate;
+
   // ── Goal fields ──────────────────────────────────────
   String? _goalType;
   final _targetWeightCtrl = TextEditingController();
@@ -84,6 +89,8 @@ class _GoalScreenState extends State<GoalScreen> {
 
   @override
   void dispose() {
+    _weightCtrl.dispose();
+    _heightCtrl.dispose();
     _targetWeightCtrl.dispose();
     _avoidCtrl.dispose();
     super.dispose();
@@ -92,8 +99,24 @@ class _GoalScreenState extends State<GoalScreen> {
   Future<void> _loadGoal() async {
     try {
       final goal = await ApiClient.getGoal();
+      Map<String, dynamic>? user;
+      try {
+        user = await ApiClient.me();
+      } catch (_) {}
+
       if (mounted) {
         setState(() {
+          if (user != null) {
+            final w = user['weight'];
+            if (w != null) _weightCtrl.text = w.toString();
+            final h = user['height'];
+            if (h != null) _heightCtrl.text = h.toString();
+            final b = user['birthdate'] as String?;
+            if (b != null && b.isNotEmpty) {
+              _birthdate = DateTime.tryParse(b);
+            }
+          }
+
           _goalType = goal['goal_type'] as String?;
           final tw = goal['target_weight'];
           if (tw != null) _targetWeightCtrl.text = tw.toString();
@@ -117,9 +140,64 @@ class _GoalScreenState extends State<GoalScreen> {
     }
   }
 
+  Future<void> _pickDate() async {
+    final d = await showDatePicker(
+      context: context,
+      initialDate: _birthdate ?? DateTime(1995, 1, 1),
+      firstDate: DateTime(1920),
+      lastDate: DateTime.now().subtract(const Duration(days: 365 * 10)),
+    );
+    if (d != null) setState(() => _birthdate = d);
+  }
+
+  Future<void> _handleSkip() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Skip Goal Setup?'),
+        content: const Text(
+          'Without setting up your fitness goals and measurements, your daily nutrition targets and workout recommendations will use default estimates.\n\nYou can configure your goal anytime from your Profile tab.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Go Back'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Skip Anyway'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      widget.onSaved?.call();
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop(false);
+      }
+    }
+  }
+
   Future<void> _save() async {
     setState(() { _saving = true; _error = null; });
     try {
+      final wText = _weightCtrl.text.trim();
+      final hText = _heightCtrl.text.trim();
+      final w = wText.isNotEmpty ? double.tryParse(wText) : null;
+      final h = hText.isNotEmpty ? double.tryParse(hText) : null;
+      final bStr = _birthdate != null
+          ? '${_birthdate!.year}-${_birthdate!.month.toString().padLeft(2, '0')}-${_birthdate!.day.toString().padLeft(2, '0')}'
+          : null;
+
+      if (w != null || h != null || bStr != null) {
+        await ApiClient.updateMeasurements(
+          weight: w,
+          height: h,
+          birthdate: bStr,
+        );
+      }
+
       final twText = _targetWeightCtrl.text.trim();
       final tw = twText.isNotEmpty ? double.tryParse(twText) : null;
       final eqStr = _equipment.isNotEmpty ? _equipment.join(',') : null;
@@ -166,11 +244,51 @@ class _GoalScreenState extends State<GoalScreen> {
                 if (widget.isOnboarding) ...[
                   const SizedBox(height: 8),
                   Text(
-                    'Tell us about your goal so we can give you personalised recommendations. You can always update this later.',
+                    'Tell us about your goal and measurements so we can give you personalized recommendations. You can always update this later.',
                     style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
                   ),
                   const SizedBox(height: 16),
                 ],
+
+                // ── Physical Profile ───────────────────
+                _sectionHeader('Body Measurements (optional)'),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _weightCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'Current Weight',
+                          suffixText: 'kg',
+                          hintText: 'e.g. 70.0',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: _heightCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'Height',
+                          suffixText: 'cm',
+                          hintText: 'e.g. 175',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _pickDate,
+                  icon: const Icon(Icons.calendar_today, size: 16),
+                  label: Text(_birthdate == null
+                      ? 'Select Date of Birth'
+                      : 'Birthdate: ${_birthdate!.year}-${_birthdate!.month.toString().padLeft(2, '0')}-${_birthdate!.day.toString().padLeft(2, '0')}'),
+                ),
+
+                const SizedBox(height: 20),
 
                 // ── Goal type ─────────────────────────
                 _sectionHeader('What is your primary goal?'),
@@ -305,11 +423,13 @@ class _GoalScreenState extends State<GoalScreen> {
                       : Text(widget.isOnboarding ? 'Get started →' : 'Save goal'),
                 ),
 
-                if (widget.isOnboarding)
+                if (widget.isOnboarding) ...[
+                  const SizedBox(height: 8),
                   TextButton(
-                    onPressed: () => Navigator.of(context).pop(false),
+                    onPressed: _handleSkip,
                     child: const Text('Skip for now'),
                   ),
+                ],
               ],
             ),
     );

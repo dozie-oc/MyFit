@@ -21,10 +21,11 @@ class UserCreate(BaseModel):
         max_length=128,
     )
 
-    weight: float = Field(gt=0)
-    height: float = Field(gt=0)
+    weight: float | None = Field(default=None, gt=0)
+    height: float | None = Field(default=None, gt=0)
 
-    birthdate: date
+    birthdate: date | None = None
+
 
 
 class UserAuth(BaseModel):
@@ -48,10 +49,10 @@ class UserOut(BaseModel):
 
     id: int
     username: str
-    weight: float
-    height: float
-    birthdate: date
-    age: int
+    weight: float | None = None
+    height: float | None = None
+    birthdate: date | None = None
+    age: int | None = None
 
 
 class Token(BaseModel):
@@ -62,10 +63,11 @@ class Token(BaseModel):
 
 
 class UserMeasurementsUpdate(BaseModel):
-    """Input for updating user weight and height measurements."""
+    """Input for updating user weight, height, and birthdate measurements."""
 
     weight: float | None = Field(default=None, gt=0, le=500)
     height: float | None = Field(default=None, gt=0, le=300)
+    birthdate: date | None = None
 
 
 # ============================================================

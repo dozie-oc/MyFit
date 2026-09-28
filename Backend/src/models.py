@@ -24,10 +24,10 @@ class User(SQLModel, table=True):
 
     # These are the user's current measurements.
     # Historical weight changes are stored separately in WeightLog.
-    weight: float = Field(gt=0)
-    height: float = Field(gt=0)
+    weight: float | None = Field(default=None)
+    height: float | None = Field(default=None)
 
-    birthdate: Date
+    birthdate: Date | None = None
 
     created_at: datetime = Field(
         default_factory=utc_now

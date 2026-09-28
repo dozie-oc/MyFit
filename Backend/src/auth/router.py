@@ -104,7 +104,7 @@ def register(
         weight=user.weight,
         height=user.height,
         birthdate=user.birthdate,
-        age=calculate_age(user.birthdate),
+        age=calculate_age(user.birthdate) if user.birthdate else None,
     )
 
 
@@ -197,9 +197,7 @@ def get_me(
         weight=current_user.weight,
         height=current_user.height,
         birthdate=current_user.birthdate,
-        age=calculate_age(
-            current_user.birthdate,
-        ),
+        age=calculate_age(current_user.birthdate) if current_user.birthdate else None,
     )
 
 
@@ -241,6 +239,9 @@ def update_measurements(
     if data.height is not None:
         current_user.height = data.height
 
+    if data.birthdate is not None:
+        current_user.birthdate = data.birthdate
+
     session.add(current_user)
     session.commit()
     session.refresh(current_user)
@@ -251,7 +252,7 @@ def update_measurements(
         weight=current_user.weight,
         height=current_user.height,
         birthdate=current_user.birthdate,
-        age=calculate_age(current_user.birthdate),
+        age=calculate_age(current_user.birthdate) if current_user.birthdate else None,
     )
 
 

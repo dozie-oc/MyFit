@@ -148,22 +148,35 @@ def _nutrition_per_grams(food: FoodItem, grams: float) -> dict[str, float]:
     }
 
 
+def _word_in_text(word: str, text: str) -> bool:
+    """
+    Return True if `word` appears as a whole token in `text`.
+    Tokens are separated by any non-alphanumeric character.
+    e.g. 'butter' in 'peanut butter' -> True
+         'butter' in 'buttermilk'    -> False
+    """
+    import re
+    pattern = r'(?<![\w])' + re.escape(word) + r'(?![\w])'
+    return bool(re.search(pattern, text))
+
+
 def _is_food_allowed(food_name: str, dietary_pref: str, avoid_list: list[str]) -> bool:
     lower = food_name.lower()
+    # Avoid list: match each avoid term as a whole word/token
     for avoid in avoid_list:
-        if avoid in lower:
+        if _word_in_text(avoid.strip(), lower):
             return False
 
     if dietary_pref == "vegan":
         animal_keywords = MEAT_POULTRY_KEYWORDS | SEAFOOD_KEYWORDS | DAIRY_EGG_KEYWORDS
-        if any(kw in lower for kw in animal_keywords):
+        if any(_word_in_text(kw, lower) for kw in animal_keywords):
             return False
     elif dietary_pref == "vegetarian":
         meat_fish = MEAT_POULTRY_KEYWORDS | SEAFOOD_KEYWORDS
-        if any(kw in lower for kw in meat_fish):
+        if any(_word_in_text(kw, lower) for kw in meat_fish):
             return False
     elif dietary_pref == "pescatarian":
-        if any(kw in lower for kw in MEAT_POULTRY_KEYWORDS):
+        if any(_word_in_text(kw, lower) for kw in MEAT_POULTRY_KEYWORDS):
             return False
 
     return True
@@ -375,10 +388,16 @@ def _is_exercise_equipment_compatible(
     if not user_equipment_set:
         return True
 
+    # If the user has explicitly said 'none', only allow exercises that are
+    # confirmed bodyweight in our catalog map. Do NOT fall back to bodyweight
+    # for unknown exercises, since an unknown exercise may require equipment.
+    user_has_no_equipment = user_equipment_set == {"none"}
+
     lower = exercise_name.lower().strip()
     req = EXERCISE_EQUIPMENT_MAP.get(lower)
 
     if not req:
+        # Heuristic inference for unknown exercise names
         if "barbell" in lower:
             req = "barbell"
         elif "dumbbell" in lower:
@@ -386,11 +405,16 @@ def _is_exercise_equipment_compatible(
         elif "machine" in lower or "cable" in lower:
             req = "machines"
         else:
+            # Unknown exercise with no keyword hint:
+            # only allow if the user has real equipment (not 'none'-only)
+            if user_has_no_equipment:
+                return False
             req = "bodyweight"
 
     if req == "bodyweight":
         return True
 
+    # Bodyweight exercises are always allowed (they need no equipment)
     has_barbell = "barbell" in user_equipment_set
     has_dumbbell = "dumbbell" in user_equipment_set or "dumbbells" in user_equipment_set
     has_machines = "machines" in user_equipment_set or "machine" in user_equipment_set or "cables" in user_equipment_set
@@ -587,9 +611,36 @@ def get_recommendation(
     protein_remaining = max(0.0, protein_target - total_protein)
 
     # ── Completion states ────────────────────────────────────────
-    # Exercise completion: 1 or more logged sessions means user has exercised today
+    goal_type_str = (goal.goal_type or "improve_fitness").lower() if goal else "improve_fitness"
     sessions_today = len(today_exercises)
-    exercise_done = sessions_today >= 1
+
+    # Goal-aware exercise completion:
+    # Some goals require a *meaningful* workout of the right category, not just any logged exercise.
+    STRENGTH_GOALS = {"build_muscle", "gain_weight", "get_stronger"}
+    CARDIO_GOALS = {"improve_endurance"}
+    EITHER_GOALS = {"improve_fitness", "lose_weight", "maintain_weight"}
+
+    def _session_counts_for_goal(exs: list[Exercise]) -> bool:
+        """Return True if at least one logged exercise today is meaningful for the user's goal."""
+        if not exs:
+            return False
+        if goal_type_str in STRENGTH_GOALS:
+            return any(
+                (getattr(e, "category", None) or "").lower() == "strength" or
+                EXERCISE_EQUIPMENT_MAP.get(e.name.lower(), "") == "barbell" or
+                any(kw in e.name.lower() for kw in ("press", "squat", "deadlift", "curl", "row", "pull", "push"))
+                for e in exs
+            )
+        if goal_type_str in CARDIO_GOALS:
+            return any(
+                (getattr(e, "category", None) or "").lower() == "cardio" or
+                any(kw in e.name.lower() for kw in ("run", "walk", "swim", "bike", "cardio", "hiit", "elliptical", "jump", "row"))
+                for e in exs
+            )
+        # EITHER_GOALS or unknown: any exercise counts
+        return True
+
+    exercise_done = _session_counts_for_goal(today_exercises)
 
     # Check weekly training frequency if training_days_per_week is set
     training_days = goal.training_days_per_week if goal else None
@@ -615,25 +666,19 @@ def get_recommendation(
 
     # ── Explicit type request handling ─────────────────────────
     if rec_type == "exercise":
-        if sessions_today >= 1:
-            ex_names = ", ".join(e.name for e in today_exercises)
-            return RecommendationResponse(
-                has_recommendation=False,
-                type="none",
-                reason=(
-                    f"You have already completed your workout today ({ex_names}). "
-                    "Great work – make sure to rest and recover!"
-                ),
-                items=[],
+        if exercise_done:
+            ex_names = ", ".join(e.name for e in today_exercises) if today_exercises else ""
+            reason = (
+                f"You have already completed a meaningful workout today ({ex_names}). "
+                "Great work – make sure to rest and recover!"
+            ) if ex_names else (
+                "Today is a scheduled rest day based on your weekly training target. "
+                "Rest up and recover!"
             )
-        if exercise_done and training_days:
             return RecommendationResponse(
                 has_recommendation=False,
                 type="none",
-                reason=(
-                    f"You've already trained {training_days} days this week, hitting your weekly target! "
-                    "Today is a scheduled rest day."
-                ),
+                reason=reason,
                 items=[],
             )
         return _recommend_exercise(session, user, goal, today_exercises)

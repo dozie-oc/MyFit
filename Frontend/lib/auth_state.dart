@@ -35,6 +35,11 @@ class AuthState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void markGoalIncomplete() {
+    _hasGoal = false;
+    notifyListeners();
+  }
+
   // Restore session on app start
   Future<void> restore() async {
     _token = await ApiClient.getToken();
@@ -101,9 +106,9 @@ class AuthState extends ChangeNotifier {
   Future<bool> register({
     required String username,
     required String password,
-    required double weight,
-    required double height,
-    required String birthdate,
+    double? weight,
+    double? height,
+    String? birthdate,
   }) async {
     _loading = true;
     _error = null;
