@@ -573,7 +573,8 @@ def get_recommendation(
     - User goal & profile (weight, activity level)
     - Today's meals & meal types
     - Today's calories and protein consumed vs target
-    - Today's exercises & training days per week
+    - Today's exercises & training adequacy evaluation
+    - Muscle-group coverage and weekly volume
     - Available equipment & dietary restrictions
     """
     if today is None:
@@ -610,54 +611,21 @@ def get_recommendation(
     cal_remaining = max(0.0, cal_target - total_cal)
     protein_remaining = max(0.0, protein_target - total_protein)
 
-    # ── Completion states ────────────────────────────────────────
-    goal_type_str = (goal.goal_type or "improve_fitness").lower() if goal else "improve_fitness"
-    sessions_today = len(today_exercises)
+    # ── Training adequacy evaluation ─────────────────────────────
+    # This replaces the old "_session_counts_for_goal" check that
+    # treated ANY single exercise as completing the workout.
+    from src.services.training_service import evaluate_training_adequacy
 
-    # Goal-aware exercise completion:
-    # Some goals require a *meaningful* workout of the right category, not just any logged exercise.
-    STRENGTH_GOALS = {"build_muscle", "gain_weight", "get_stronger"}
-    CARDIO_GOALS = {"improve_endurance"}
-    EITHER_GOALS = {"improve_fitness", "lose_weight", "maintain_weight"}
+    adequacy = evaluate_training_adequacy(
+        session=session,
+        user_id=user.id,
+        goal=goal,
+        today=today,
+    )
 
-    def _session_counts_for_goal(exs: list[Exercise]) -> bool:
-        """Return True if at least one logged exercise today is meaningful for the user's goal."""
-        if not exs:
-            return False
-        if goal_type_str in STRENGTH_GOALS:
-            return any(
-                (getattr(e, "category", None) or "").lower() == "strength" or
-                EXERCISE_EQUIPMENT_MAP.get(e.name.lower(), "") == "barbell" or
-                any(kw in e.name.lower() for kw in ("press", "squat", "deadlift", "curl", "row", "pull", "push"))
-                for e in exs
-            )
-        if goal_type_str in CARDIO_GOALS:
-            return any(
-                (getattr(e, "category", None) or "").lower() == "cardio" or
-                any(kw in e.name.lower() for kw in ("run", "walk", "swim", "bike", "cardio", "hiit", "elliptical", "jump", "row"))
-                for e in exs
-            )
-        # EITHER_GOALS or unknown: any exercise counts
-        return True
-
-    exercise_done = _session_counts_for_goal(today_exercises)
-
-    # Check weekly training frequency if training_days_per_week is set
-    training_days = goal.training_days_per_week if goal else None
-    if training_days and training_days < 7 and sessions_today == 0:
-        monday = today - timedelta(days=today.weekday())
-        week_exercises = session.exec(
-            select(Exercise).where(
-                Exercise.user_id == user.id,
-                Exercise.date >= monday,
-                Exercise.date <= today,
-                Exercise.deleted_at.is_(None),
-            )
-        ).all()
-        trained_days_this_week = len({e.date for e in week_exercises})
-        if trained_days_this_week >= training_days:
-            # User has already hit their training frequency this week on previous days!
-            exercise_done = True
+    # Derive exercise completion from training adequacy instead of
+    # the old "one exercise = done" logic.
+    exercise_done = adequacy.session_action in ("workout_adequate", "rest")
 
     # Nutrition completion: within 90% calories and 85% protein, or < 150 kcal remaining
     cal_done = total_cal >= cal_target * 0.90 or cal_remaining < 150
@@ -667,21 +635,28 @@ def get_recommendation(
     # ── Explicit type request handling ─────────────────────────
     if rec_type == "exercise":
         if exercise_done:
-            ex_names = ", ".join(e.name for e in today_exercises) if today_exercises else ""
-            reason = (
-                f"You have already completed a meaningful workout today ({ex_names}). "
-                "Great work – make sure to rest and recover!"
-            ) if ex_names else (
-                "Today is a scheduled rest day based on your weekly training target. "
-                "Rest up and recover!"
-            )
+            if adequacy.session_action == "rest":
+                reason = (
+                    "Today is a scheduled rest day based on your weekly training target. "
+                    "Rest up and recover!"
+                )
+            else:
+                ex_names = ", ".join(e.name for e in today_exercises) if today_exercises else ""
+                # Include adequacy detail for context
+                reason = (
+                    f"You have completed enough work for this session ({ex_names}). "
+                    f"{adequacy.detail} "
+                    "Great work – make sure to rest and recover!"
+                )
             return RecommendationResponse(
                 has_recommendation=False,
                 type="none",
                 reason=reason,
                 items=[],
             )
-        return _recommend_exercise(session, user, goal, today_exercises)
+        return _recommend_exercise_with_adequacy(
+            session, user, goal, today_exercises, adequacy
+        )
 
     if rec_type == "meal":
         if nutrition_done or cal_remaining < MIN_CALORIE_REMAINING:
@@ -699,6 +674,8 @@ def get_recommendation(
         )
 
     # ── General recommendation (rec_type is None) ───────────────
+    sessions_today = len(today_exercises)
+
     # Case 1: Both nutrition and exercise are complete
     if nutrition_done and exercise_done:
         return RecommendationResponse(
@@ -726,7 +703,9 @@ def get_recommendation(
     # Case 3: Breakfast logged, but workout not completed yet
     # Natural flow: eat breakfast -> do workout!
     if "breakfast" in logged_types and not exercise_done:
-        return _recommend_exercise(session, user, goal, today_exercises)
+        return _recommend_exercise_with_adequacy(
+            session, user, goal, today_exercises, adequacy
+        )
 
     # Case 4: Exercise done, next meal needed
     if exercise_done and not nutrition_done and cal_remaining >= MIN_CALORIE_REMAINING:
@@ -742,7 +721,9 @@ def get_recommendation(
 
     # Case 6: Nutrition is done, but exercise remains
     if not exercise_done:
-        return _recommend_exercise(session, user, goal, today_exercises)
+        return _recommend_exercise_with_adequacy(
+            session, user, goal, today_exercises, adequacy
+        )
 
     # Default fallback: on track
     return RecommendationResponse(
@@ -750,3 +731,191 @@ def get_recommendation(
         type="none",
         reason="You're on track for today – both your nutrition and workout look good!",
     )
+
+
+def _recommend_exercise_with_adequacy(
+    session: Session,
+    user: User,
+    goal: UserGoal | None,
+    today_exercises: list[Exercise],
+    adequacy,
+) -> RecommendationResponse:
+    """
+    Workout-aware exercise recommendation.
+
+    Uses training adequacy data to recommend exercises that target
+    undertrained muscle groups, respecting the current session's
+    split context.
+
+    Falls back to the original _recommend_exercise() logic if no
+    muscle-group-aware recommendation can be made.
+    """
+    goal_type = (goal.goal_type if goal else None) or "improve_fitness"
+    experience = (goal.training_experience or "beginner").lower() if goal else "beginner"
+    equipment_str = (goal.available_equipment or "") if goal else ""
+    user_equipment = {e.strip().lower() for e in equipment_str.split(",") if e.strip()}
+    done_names = {e.name.lower().strip() for e in today_exercises}
+
+    # Load full catalog
+    catalog: list[ExerciseCatalogItem] = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.deleted_at.is_(None))
+    ).all()
+
+    if not catalog:
+        return RecommendationResponse(
+            has_recommendation=False,
+            type="none",
+            reason="No exercises found in the catalog. Add exercises to get recommendations.",
+            items=[],
+        )
+
+    # Filter out exercises already done today and incompatible equipment
+    eligible = [
+        item for item in catalog
+        if item.name.lower().strip() not in done_names
+        and _is_exercise_equipment_compatible(item.name, user_equipment)
+    ]
+
+    if not eligible:
+        if done_names:
+            return RecommendationResponse(
+                has_recommendation=False,
+                type="none",
+                reason="You've already covered all available compatible exercises for today. Great work!",
+                items=[],
+            )
+        return RecommendationResponse(
+            has_recommendation=False,
+            type="none",
+            reason="No exercises in the catalog match your available equipment.",
+            items=[],
+        )
+
+    # Use training adequacy to find muscles that need work
+    from src.services.training_service import (
+        get_muscle_mappings,
+        _get_relevant_muscles_for_split,
+    )
+
+    mappings_by_catalog_id = get_muscle_mappings(session)
+    target_muscles = _get_relevant_muscles_for_split(adequacy.detected_split)
+
+    # Find the most undertrained muscles relevant to the current split
+    undertrained_muscles = sorted(
+        [
+            mv for mv in adequacy.muscle_volumes.values()
+            if mv.status == "undertrained" and mv.muscle_group in target_muscles
+        ],
+        key=lambda mv: mv.effective_sets / max(mv.target_min, 0.1),
+    )
+
+    needed_muscle_set = {mv.muscle_group for mv in undertrained_muscles[:4]}
+
+    # Score eligible exercises: prefer those that hit needed muscles
+    def _adequacy_score(item: ExerciseCatalogItem) -> float:
+        """
+        Lower score = better recommendation.
+        Exercises that target needed muscle groups score much lower.
+        """
+        mappings = mappings_by_catalog_id.get(item.id, [])
+        primary_muscles = {m.muscle_group for m in mappings if m.role == "primary"}
+        secondary_muscles = {m.muscle_group for m in mappings if m.role == "secondary"}
+
+        # Primary match is worth more than secondary
+        primary_overlap = primary_muscles & needed_muscle_set
+        secondary_overlap = secondary_muscles & needed_muscle_set
+
+        # Score: lower is better
+        muscle_score = 100 - (len(primary_overlap) * 30 + len(secondary_overlap) * 10)
+
+        # Prefer exercises matching goal categories
+        preferred_categories = GOAL_EXERCISE_CATEGORY.get(goal_type, ["cardio", "strength"])
+        cat_bonus = 0 if item.category in preferred_categories else 50
+
+        # Experience-based preference
+        exp_bonus = 0
+        if experience == "beginner":
+            if item.name.lower() in ("push-ups", "walking", "plank", "barbell squat", "bench press"):
+                exp_bonus = -15
+        elif experience == "advanced":
+            if item.name.lower() in ("deadlift", "running", "overhead press", "barbell row", "hiit"):
+                exp_bonus = -15
+
+        return muscle_score + cat_bonus + exp_bonus
+
+    eligible.sort(key=_adequacy_score)
+    pick = eligible[0]
+
+    # Suggest sets/reps or duration based on category and experience
+    sets: int | None = None
+    reps: int | None = None
+    duration: int | None = None
+
+    if pick.category == "strength":
+        if experience == "beginner":
+            sets, reps = 3, 10
+        elif experience == "intermediate":
+            sets, reps = 4, 8
+        else:
+            sets, reps = 5, 5
+    elif pick.category == "cardio":
+        if experience == "beginner":
+            duration = 20
+        elif experience == "intermediate":
+            duration = 30
+        else:
+            duration = 45
+    elif pick.category == "flexibility":
+        duration = 20 if experience == "beginner" else 30
+
+    item = RecommendationItem(
+        name=pick.name,
+        category=pick.category,
+        sets=sets,
+        reps=reps,
+        duration_minutes=duration,
+        description=pick.description,
+    )
+
+    detail_parts = []
+    if sets and reps:
+        detail_parts.append(f"{sets} sets × {reps} reps")
+    if duration:
+        detail_parts.append(f"{duration} minutes")
+    detail_str = " · ".join(detail_parts)
+
+    # Build a context-aware reason using adequacy information
+    reason = f"Based on your '{goal_type.replace('_', ' ')}' goal and {experience} experience"
+
+    # Add muscle-group context from adequacy
+    pick_mappings = mappings_by_catalog_id.get(pick.id, [])
+    pick_primary = [m.muscle_group.replace("_", "/") for m in pick_mappings if m.role == "primary"]
+
+    if done_names:
+        done_str = ", ".join(list(done_names)[:2])
+        reason += f" (already logged: {done_str})"
+
+        # Explain WHY this exercise was chosen
+        if pick_primary and needed_muscle_set:
+            trained_muscles = []
+            for mv in adequacy.muscle_volumes.values():
+                if mv.effective_sets > 0 and mv.muscle_group in target_muscles:
+                    trained_muscles.append(mv.muscle_group.replace("_", "/"))
+            if trained_muscles:
+                reason += f". {', '.join(trained_muscles[:2])} already received some work"
+            if pick_primary:
+                reason += f", but {', '.join(pick_primary)} still needs attention"
+    else:
+        reason += " — you haven't exercised yet today"
+
+    if detail_str:
+        reason += f". Suggested: {detail_str}."
+
+    return RecommendationResponse(
+        has_recommendation=True,
+        type="exercise",
+        title="Recommended Exercise",
+        reason=reason,
+        items=[item],
+    )
+

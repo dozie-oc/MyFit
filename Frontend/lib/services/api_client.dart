@@ -403,4 +403,12 @@ class ApiClient {
     if (type != null && type.isNotEmpty) params['type'] = type;
     return await get('/recommendations/today', params);
   }
+
+  // ─────────────────────────────────────────
+  // TRAINING ADEQUACY
+  // ─────────────────────────────────────────
+
+  static Future<Map<String, dynamic>> getTrainingAdequacy() async {
+    return await get('/exercises/adequacy');
+  }
 }

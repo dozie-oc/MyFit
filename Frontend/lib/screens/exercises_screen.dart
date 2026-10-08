@@ -82,6 +82,8 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
       floatingActionButton: const RecommendationFAB(filterType: 'exercise'),
       body: Column(
         children: [
+          // Training adequacy status banner
+          const _TrainingAdequacyBanner(),
           // Category filter chips
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
@@ -210,6 +212,7 @@ class _ExerciseCard extends StatelessWidget {
     final weight = (exercise['weight_kg'] as num?)?.toDouble();
     final dist = (exercise['distance_km'] as num?)?.toDouble();
     final intensity = exercise['intensity'] as String?;
+    final rir = exercise['rir'] as int?;
 
     IconData iconData = Icons.fitness_center;
     Color iconColor = const Color(0xFFEF4444);
@@ -230,6 +233,7 @@ class _ExerciseCard extends StatelessWidget {
     }
     if (mins != null) details.add('$mins min');
     if (dist != null && dist > 0) details.add('${dist}km');
+    if (rir != null) details.add('RIR $rir');
     if (intensity != null && intensity.isNotEmpty && intensity != 'moderate') {
       details.add(intensity);
     }
@@ -337,6 +341,8 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
   final _weightCtrl = TextEditingController();
   // Cardio-only field
   final _distCtrl = TextEditingController();
+  // RIR (Reps In Reserve) — optional effort indicator
+  final _rirCtrl = TextEditingController();
 
   String _category = 'strength'; // 'strength', 'cardio', 'flexibility', 'other'
   String _intensity = 'moderate'; // 'low', 'moderate', 'high'
@@ -370,6 +376,7 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
     _repsCtrl.dispose();
     _weightCtrl.dispose();
     _distCtrl.dispose();
+    _rirCtrl.dispose();
     super.dispose();
   }
 
@@ -445,6 +452,7 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
 
     setState(() => _saving = true);
     try {
+      final rirVal = isStrength ? int.tryParse(_rirCtrl.text.trim()) : null;
       final body = <String, dynamic>{
         'date': _dateStr,
         'name': name,
@@ -456,6 +464,7 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
         if (mins != null) 'duration_minutes': mins,
         if (dist != null) 'distance_km': dist,
         'intensity': _intensity,
+        if (rirVal != null) 'rir': rirVal,
       };
       await ApiClient.createExercise(body);
       if (mounted) Navigator.pop(context, true);
@@ -615,14 +624,32 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
                 ],
               ),
               const SizedBox(height: 12),
-              TextField(
-                controller: _minsCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Workout Duration (min)',
-                  hintText: 'Optional — estimated from sets if omitted',
-                ),
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _minsCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Duration (min)',
+                        hintText: 'Estimated from sets if omitted',
+                      ),
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _rirCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'RIR (optional)',
+                        hintText: '0=failure, 2=2 left',
+                      ),
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    ),
+                  ),
+                ],
               ),
             ],
 
@@ -770,3 +797,219 @@ class _IntensityPicker extends StatelessWidget {
   }
 }
 
+
+// ─────────────────────────────────────────
+// TRAINING ADEQUACY BANNER
+// ─────────────────────────────────────────
+
+class _TrainingAdequacyBanner extends StatefulWidget {
+  const _TrainingAdequacyBanner();
+
+  @override
+  State<_TrainingAdequacyBanner> createState() => _TrainingAdequacyBannerState();
+}
+
+class _TrainingAdequacyBannerState extends State<_TrainingAdequacyBanner> {
+  Future<Map<String, dynamic>>? _future;
+  bool _expanded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = ApiClient.getTrainingAdequacy();
+    ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+  }
+
+  @override
+  void dispose() {
+    ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    super.dispose();
+  }
+
+  void _onDataChanged() {
+    if (mounted) {
+      setState(() => _future = ApiClient.getTrainingAdequacy());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _future,
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting || snap.hasError || snap.data == null) {
+          return const SizedBox.shrink();
+        }
+
+        final data = snap.data!;
+        final summary = data['summary'] as String? ?? '';
+        final detail = data['detail'] as String? ?? '';
+        final sessionAction = data['session_action'] as String? ?? '';
+        final exercisesToday = data['exercises_today'] as int? ?? 0;
+        final totalSets = (data['total_sets_today'] as num?)?.toDouble() ?? 0;
+        final recommendedNext = (data['recommended_next'] as List?)?.cast<String>() ?? [];
+        final muscleGroups = (data['muscle_groups'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+
+        // Determine banner style based on session action
+        Color bannerColor;
+        IconData bannerIcon;
+        switch (sessionAction) {
+          case 'workout_adequate':
+            bannerColor = const Color(0xFF10B981); // green
+            bannerIcon = Icons.check_circle_rounded;
+            break;
+          case 'rest':
+            bannerColor = const Color(0xFF6366F1); // indigo
+            bannerIcon = Icons.hotel_rounded;
+            break;
+          default: // continue_workout
+            bannerColor = const Color(0xFFF59E0B); // amber
+            bannerIcon = Icons.trending_up_rounded;
+        }
+
+        return AnimatedSize(
+          duration: const Duration(milliseconds: 200),
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            decoration: BoxDecoration(
+              color: bannerColor.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: bannerColor.withValues(alpha: 0.25)),
+            ),
+            child: InkWell(
+              onTap: () => setState(() => _expanded = !_expanded),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Header row
+                    Row(
+                      children: [
+                        Icon(bannerIcon, size: 18, color: bannerColor),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                summary,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: bannerColor,
+                                ),
+                              ),
+                              if (exercisesToday > 0)
+                                Text(
+                                  '$exercisesToday exercises · ${totalSets.toStringAsFixed(0)} total sets',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF9CA3AF),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        Icon(
+                          _expanded ? Icons.expand_less : Icons.expand_more,
+                          size: 18,
+                          color: const Color(0xFF9CA3AF),
+                        ),
+                      ],
+                    ),
+
+                    // Expanded detail
+                    if (_expanded) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        detail,
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280), height: 1.4),
+                      ),
+
+                      // Recommended next actions
+                      if (recommendedNext.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        ...recommendedNext.map((r) => Padding(
+                          padding: const EdgeInsets.only(bottom: 3),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.arrow_forward_rounded, size: 12, color: bannerColor),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  r,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: bannerColor,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        )),
+                      ],
+
+                      // Muscle group mini-bars (only show muscles with > 0 sets)
+                      if (muscleGroups.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: muscleGroups
+                              .where((mg) {
+                                final sets = (mg['sets_completed'] as num?)?.toDouble() ?? 0;
+                                return sets > 0;
+                              })
+                              .map((mg) {
+                                final name = (mg['muscle_group'] as String? ?? '')
+                                    .replaceAll('_', '/');
+                                final status = mg['status'] as String? ?? '';
+                                final sets = (mg['sets_completed'] as num?)?.toDouble() ?? 0;
+
+                                Color chipColor;
+                                switch (status) {
+                                  case 'adequate':
+                                    chipColor = const Color(0xFF10B981);
+                                    break;
+                                  case 'high':
+                                    chipColor = const Color(0xFF6366F1);
+                                    break;
+                                  default: // undertrained
+                                    chipColor = const Color(0xFFF59E0B);
+                                }
+
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: chipColor.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    '$name ${sets.toStringAsFixed(1)}s',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w500,
+                                      color: chipColor,
+                                    ),
+                                  ),
+                                );
+                              })
+                              .toList(),
+                        ),
+                      ],
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}

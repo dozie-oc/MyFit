@@ -448,6 +448,91 @@ class ExerciseCatalogItem(SQLModel, table=True):
     deleted_at: datetime | None = None
 
 
+class ExerciseMuscleMapping(SQLModel, table=True):
+    """
+    Maps an exercise catalog item to the muscle groups it trains.
+
+    One exercise can have multiple mappings (e.g. bench press trains
+    chest as primary, triceps and shoulders as secondary).
+
+    The 'role' column distinguishes primary from secondary muscles,
+    enabling future contribution weighting without schema changes.
+    """
+
+    __table_args__ = (
+        UniqueConstraint(
+            "exercise_catalog_id",
+            "muscle_group",
+            name="uq_muscle_mapping_exercise_muscle",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    exercise_catalog_id: int = Field(
+        foreign_key="exercisecatalogitem.id",
+        index=True,
+    )
+
+    # Supported muscle groups:
+    # chest, back, shoulders, biceps, triceps, forearms,
+    # quadriceps, hamstrings, glutes, calves, abs_core
+    muscle_group: str = Field(
+        max_length=50,
+        index=True,
+    )
+
+    # 'primary' or 'secondary' — determines contribution weight
+    role: str = Field(
+        default="primary",
+        max_length=20,
+    )
+
+    # Movement pattern classification for split-aware recommendations.
+    # Values: horizontal_push, vertical_push, horizontal_pull,
+    #         vertical_pull, squat, hinge, lunge, carry, isolation,
+    #         core, cardio, mobility, other
+    movement_pattern: str | None = Field(
+        default=None,
+        max_length=50,
+    )
+
+
+class WorkoutSession(SQLModel, table=True):
+    """
+    Groups exercises belonging to the same workout.
+
+    Exercises logged without an explicit session are still usable;
+    the system falls back to date-based grouping.  This model enables
+    explicit start/complete/abandon semantics once the frontend
+    supports them.
+
+    Possible status values:
+        active     — session in progress
+        completed  — user marked the workout as done
+        abandoned  — user cancelled / did not finish
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    user_id: int = Field(
+        foreign_key="user.id",
+        index=True,
+    )
+
+    date: Date = Field(index=True)
+
+    started_at: datetime | None = Field(default=None)
+    completed_at: datetime | None = Field(default=None)
+
+    status: str = Field(
+        default="active",
+        max_length=20,
+    )
+
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class Exercise(SQLModel, table=True):
     """
     A logged exercise session.
@@ -509,6 +594,23 @@ class Exercise(SQLModel, table=True):
     intensity: str | None = Field(
         default="moderate",
         max_length=20,
+    )
+
+    # Reps In Reserve — optional effort indicator for resistance training.
+    # 0 = approximately failure, 1 = one rep left, 2 = two reps left, etc.
+    # None means unknown (not failure, not easy — just unspecified).
+    rir: int | None = Field(
+        default=None,
+        ge=0,
+        le=10,
+    )
+
+    # Optional link to a WorkoutSession for explicit grouping.
+    # If null, the system falls back to date-based grouping.
+    workout_session_id: int | None = Field(
+        default=None,
+        foreign_key="workoutsession.id",
+        index=True,
     )
 
     calories_burned_per_minute: float = Field(

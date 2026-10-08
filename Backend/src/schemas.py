@@ -519,6 +519,13 @@ class ExerciseLogCreate(BaseModel):
         max_length=20,
     )
 
+    rir: int | None = Field(
+        default=None,
+        ge=0,
+        le=10,
+        description="Reps In Reserve: 0 = failure, 1 = one rep left, etc.",
+    )
+
     @field_validator("name")
     @classmethod
     def normalize_name(cls, value: str) -> str:
@@ -541,7 +548,85 @@ class ExerciseOut(BaseModel):
     duration_minutes: int | None = None
     distance_km: float | None = None
     intensity: str | None = None
+    rir: int | None = None
     calories_burned: float
+
+
+# ============================================================
+# EXERCISE CATALOG MUSCLE MAPPING
+# ============================================================
+
+
+class ExerciseMuscleMappingOut(BaseModel):
+    """Muscle mapping for a catalog exercise."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    muscle_group: str
+    role: str  # "primary" | "secondary"
+    movement_pattern: str | None = None
+
+
+class ExerciseCatalogItemDetailOut(BaseModel):
+    """Extended catalog item including muscle mappings."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    category: str
+    default_met: float
+    description: str | None = None
+    is_custom: bool = False
+    muscle_mappings: list[ExerciseMuscleMappingOut] = Field(default_factory=list)
+
+
+# ============================================================
+# TRAINING ADEQUACY
+# ============================================================
+
+
+class MuscleGroupStatus(BaseModel):
+    """Training status for a single muscle group."""
+
+    muscle_group: str
+    status: str  # "undertrained" | "adequate" | "high"
+    sets_completed: float
+    target_min: float
+    target_max: float
+
+
+class TrainingAdequacyResponse(BaseModel):
+    """
+    Structured training adequacy evaluation.
+
+    Answers: given the user's recent work, goal, experience, and
+    frequency, what areas are well-trained and what areas need
+    attention?
+    """
+
+    # Overall workout status for the current period
+    overall_status: str  # "insufficient" | "adequate" | "high"
+
+    # Recommended action for the current session
+    # "continue_workout" | "workout_adequate" | "prioritize_next_session" | "rest"
+    session_action: str
+
+    # Per-muscle-group breakdown
+    muscle_groups: list[MuscleGroupStatus] = Field(default_factory=list)
+
+    # What to do next — specific exercise suggestions or textual guidance
+    recommended_next: list[str] = Field(default_factory=list)
+
+    # Human-readable explanation
+    summary: str
+    detail: str
+
+    # How many exercises have been logged in the current session/day
+    exercises_today: int = 0
+
+    # Total sets logged today across all muscle groups
+    total_sets_today: float = 0
 
 
 # ============================================================

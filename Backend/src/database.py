@@ -56,16 +56,23 @@ def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
 
     # Backward compatibility for existing SQLite databases without Alembic:
-    # Ensure meal_type column exists on meal table with default 'snack'.
+    # Add new columns to existing tables if they don't already exist.
     with engine.connect() as conn:
-        try:
-            from sqlalchemy import text
-            conn.execute(text("ALTER TABLE meal ADD COLUMN meal_type VARCHAR(20) DEFAULT 'snack'"))
-            conn.commit()
-        except Exception:
-            pass
+        from sqlalchemy import text
 
-    from src.models import ExerciseCatalogItem
+        _safe_alter_table_migrations = [
+            "ALTER TABLE meal ADD COLUMN meal_type VARCHAR(20) DEFAULT 'snack'",
+            "ALTER TABLE exercise ADD COLUMN rir INTEGER",
+            "ALTER TABLE exercise ADD COLUMN workout_session_id INTEGER REFERENCES workoutsession(id)",
+        ]
+        for migration in _safe_alter_table_migrations:
+            try:
+                conn.execute(text(migration))
+                conn.commit()
+            except Exception:
+                pass
+
+    from src.models import ExerciseCatalogItem, ExerciseMuscleMapping
     from sqlmodel import select
 
     with Session(engine) as session:
@@ -100,6 +107,113 @@ def create_db_and_tables() -> None:
             ]
             session.add_all(default_catalog)
             session.commit()
+
+        # Seed muscle group mappings for standard catalog exercises.
+        # Only runs if the mapping table is empty, so existing databases
+        # that already have catalog items get the mappings populated too.
+        existing_mappings = session.exec(select(ExerciseMuscleMapping)).first()
+        if not existing_mappings:
+            _seed_muscle_mappings(session)
+
+
+def _seed_muscle_mappings(session: Session) -> None:
+    """
+    Populate muscle-group mappings for all standard exercise catalog items.
+
+    This mapping data is the foundation for training volume calculations
+    and workout adequacy evaluation.
+
+    Each tuple is: (exercise_name, muscle_group, role, movement_pattern)
+    """
+    from src.models import ExerciseCatalogItem, ExerciseMuscleMapping
+    from sqlmodel import select
+
+    # Mapping definitions: exercise_name -> [(muscle_group, role, movement_pattern)]
+    MAPPING_DATA: dict[str, list[tuple[str, str, str]]] = {
+        # ── Strength exercises ──────────────────────────────
+        "Bench Press": [
+            ("chest", "primary", "horizontal_push"),
+            ("triceps", "secondary", "horizontal_push"),
+            ("shoulders", "secondary", "horizontal_push"),
+        ],
+        "Barbell Squat": [
+            ("quadriceps", "primary", "squat"),
+            ("glutes", "primary", "squat"),
+            ("hamstrings", "secondary", "squat"),
+        ],
+        "Deadlift": [
+            ("hamstrings", "primary", "hinge"),
+            ("glutes", "primary", "hinge"),
+            ("back", "secondary", "hinge"),
+            ("forearms", "secondary", "hinge"),
+        ],
+        "Overhead Press": [
+            ("shoulders", "primary", "vertical_push"),
+            ("triceps", "secondary", "vertical_push"),
+        ],
+        "Barbell Row": [
+            ("back", "primary", "horizontal_pull"),
+            ("biceps", "secondary", "horizontal_pull"),
+        ],
+        "Dumbbell Curl": [
+            ("biceps", "primary", "isolation"),
+            ("forearms", "secondary", "isolation"),
+        ],
+        "Push-ups": [
+            ("chest", "primary", "horizontal_push"),
+            ("triceps", "secondary", "horizontal_push"),
+            ("shoulders", "secondary", "horizontal_push"),
+        ],
+        "Pull-ups": [
+            ("back", "primary", "vertical_pull"),
+            ("biceps", "secondary", "vertical_pull"),
+        ],
+        "Dips": [
+            ("triceps", "primary", "vertical_push"),
+            ("chest", "secondary", "vertical_push"),
+            ("shoulders", "secondary", "vertical_push"),
+        ],
+        "Plank": [
+            ("abs_core", "primary", "core"),
+        ],
+        "Leg Press": [
+            ("quadriceps", "primary", "squat"),
+            ("glutes", "secondary", "squat"),
+        ],
+        # ── Cardio exercises (no resistance-training muscle mappings) ──
+        # Cardio exercises are intentionally left WITHOUT muscle mappings.
+        # They use duration/distance/MET for their own adequacy model
+        # and should NOT contribute resistance-training set counts.
+    }
+
+    # Look up catalog items and create mappings
+    catalog_items = session.exec(
+        select(ExerciseCatalogItem).where(
+            ExerciseCatalogItem.is_custom == False,
+            ExerciseCatalogItem.deleted_at.is_(None),
+        )
+    ).all()
+
+    catalog_by_name = {item.name: item for item in catalog_items}
+    mappings_to_add = []
+
+    for exercise_name, muscle_entries in MAPPING_DATA.items():
+        catalog_item = catalog_by_name.get(exercise_name)
+        if not catalog_item:
+            continue
+        for muscle_group, role, movement_pattern in muscle_entries:
+            mappings_to_add.append(
+                ExerciseMuscleMapping(
+                    exercise_catalog_id=catalog_item.id,
+                    muscle_group=muscle_group,
+                    role=role,
+                    movement_pattern=movement_pattern,
+                )
+            )
+
+    if mappings_to_add:
+        session.add_all(mappings_to_add)
+        session.commit()
 
 
 # ============================================================

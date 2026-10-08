@@ -4,8 +4,14 @@ from fastapi import APIRouter, HTTPException, status
 from sqlmodel import Session, select, or_
 
 from src.dependencies import CurrentUserDep, SessionDep
-from src.models import Exercise, ExerciseCatalogItem
-from src.schemas import ExerciseCatalogItemOut, ExerciseLogCreate, ExerciseOut
+from src.models import Exercise, ExerciseCatalogItem, UserGoal
+from src.schemas import (
+    ExerciseCatalogItemOut,
+    ExerciseLogCreate,
+    ExerciseOut,
+    TrainingAdequacyResponse,
+    MuscleGroupStatus,
+)
 from src.routers.daily_summary import calculate_daily_summary
 
 
@@ -117,6 +123,59 @@ def get_exercise_catalog(
     return session.exec(query).all()
 
 
+@router.get(
+    "/adequacy",
+    response_model=TrainingAdequacyResponse,
+)
+def get_training_adequacy(
+    session: SessionDep,
+    current_user: CurrentUserDep,
+):
+    """
+    Evaluate the authenticated user's current training adequacy.
+
+    Returns structured information about:
+    - Overall training status (insufficient / adequate / high)
+    - Per-muscle-group coverage with set counts and targets
+    - Recommended next action (continue / adequate / rest)
+    - Suggested next exercises based on undertrained areas
+    - Human-readable summary and detail text
+    """
+    from src.services.training_service import evaluate_training_adequacy
+
+    goal: UserGoal | None = session.exec(
+        select(UserGoal).where(UserGoal.user_id == current_user.id)
+    ).first()
+
+    adequacy = evaluate_training_adequacy(
+        session=session,
+        user_id=current_user.id,
+        goal=goal,
+    )
+
+    muscle_group_statuses = [
+        MuscleGroupStatus(
+            muscle_group=mv.muscle_group,
+            status=mv.status,
+            sets_completed=mv.effective_sets,
+            target_min=mv.target_min,
+            target_max=mv.target_max,
+        )
+        for mv in adequacy.muscle_volumes.values()
+    ]
+
+    return TrainingAdequacyResponse(
+        overall_status=adequacy.overall_status,
+        session_action=adequacy.session_action,
+        muscle_groups=muscle_group_statuses,
+        recommended_next=adequacy.recommended_next,
+        summary=adequacy.summary,
+        detail=adequacy.detail,
+        exercises_today=adequacy.exercises_today,
+        total_sets_today=adequacy.total_sets_today,
+    )
+
+
 # ============================================================
 # EXERCISE LOGGING
 # ============================================================
@@ -181,6 +240,7 @@ def create_exercise(
         duration_minutes=exercise_data.duration_minutes,
         distance_km=exercise_data.distance_km,
         intensity=exercise_data.intensity,
+        rir=exercise_data.rir,
         calories_burned_per_minute=round(rate, 2),
         calories_burned=calories_burned,
     )
@@ -207,6 +267,7 @@ def create_exercise(
         duration_minutes=exercise.duration_minutes,
         distance_km=exercise.distance_km,
         intensity=exercise.intensity,
+        rir=exercise.rir,
         calories_burned=exercise.calories_burned,
     )
 
@@ -250,6 +311,7 @@ def get_exercises(
             duration_minutes=e.duration_minutes,
             distance_km=e.distance_km,
             intensity=e.intensity,
+            rir=e.rir,
             calories_burned=e.calories_burned if e.calories_burned > 0 else (
                 (e.duration_minutes or 0) * e.calories_burned_per_minute
             ),
@@ -293,6 +355,7 @@ def get_exercise(
         duration_minutes=exercise.duration_minutes,
         distance_km=exercise.distance_km,
         intensity=exercise.intensity,
+        rir=exercise.rir,
         calories_burned=exercise.calories_burned if exercise.calories_burned > 0 else (
             (exercise.duration_minutes or 0) * exercise.calories_burned_per_minute
         ),
