@@ -16,13 +16,21 @@ Architecture:
          ↓
     Exercise history
          ↓
-    Muscle-group mapping
+    Muscle-group mapping + Cardio evaluation
          ↓
-    Current session + recent training
-         ↓
-    Training adequacy evaluator
-         ↓
+    Session adequacy  ←──→  Weekly progress
+         ↓                        ↓
     Next-action recommender
+         ↓
+    Structured result
+
+TWO SEPARATE QUESTIONS:
+  1. Session adequacy: Has the user completed a reasonable amount of
+     goal-appropriate work in the current workout?
+  2. Weekly progress: How is the user progressing toward their broader
+     training-frequency and muscle-group targets?
+
+These signals inform one another but are NOT interchangeable.
 
 IMPORTANT HEURISTIC NOTES:
 - The weekly set targets below are starting heuristics informed by
@@ -30,12 +38,12 @@ IMPORTANT HEURISTIC NOTES:
   exact prescriptions.  Individual variation is enormous.
 - Primary muscles receive full set credit (1.0×).
   Secondary muscles receive partial credit (0.5×).
-  This is a simplification; real contribution depends on exercise
-  execution, load, and individual anatomy.
 - RIR-based effort weighting uses conservative cutoffs.
   When RIR is unknown (None), the set receives full credit rather
   than being penalised — we assume the user trained with reasonable
   effort unless they tell us otherwise.
+- Cardio adequacy is evaluated using duration, distance, and
+  intensity — NOT strength-training set counts.
 """
 
 from datetime import date as Date, timedelta
@@ -48,6 +56,7 @@ from src.models import (
     ExerciseCatalogItem,
     ExerciseMuscleMapping,
     UserGoal,
+    WorkoutSession,
 )
 
 
@@ -96,16 +105,6 @@ def _rir_effort(rir: int | None) -> float:
 
 # ──────────────────────────────────────────────────────────────────────
 # WEEKLY SET TARGETS PER MUSCLE GROUP
-#
-# These are per-week minimums and maximums, intended as starting
-# heuristics.  The literature generally suggests 10-20 sets/week for
-# hypertrophy, but beginners grow on far less and advanced lifters
-# may need more for specific muscles.
-#
-# The targets are adjusted by:
-#   1. Goal type (muscle-focused goals have higher set targets)
-#   2. Training experience (beginners need fewer sets)
-#   3. Training frequency (more days = more distribution capacity)
 # ──────────────────────────────────────────────────────────────────────
 
 # Base weekly set targets: (min, max) per muscle group.
@@ -128,30 +127,51 @@ EXPERIENCE_MULTIPLIERS: dict[str, float] = {
     "advanced": 1.3,
 }
 
-# Maximum exercises per session before recommending "enough for today".
-# This prevents the system from endlessly recommending more exercises.
-# Adjusted by training days per week (fewer days → more per session).
-MAX_EXERCISES_PER_SESSION: dict[int, int] = {
-    1: 8,
-    2: 7,
-    3: 6,
-    4: 5,
-    5: 5,
-    6: 4,
-    7: 4,
+# ──────────────────────────────────────────────────────────────────────
+# CARDIO ADEQUACY TARGETS (duration-based, per-session)
+#
+# Cardio uses duration/distance/intensity — NOT set counts.
+# ──────────────────────────────────────────────────────────────────────
+
+# Minimum minutes for a cardio session to be considered meaningful.
+CARDIO_MIN_DURATION: dict[str, int] = {
+    "beginner": 15,
+    "intermediate": 20,
+    "advanced": 25,
 }
 
-# Maximum total sets per session before the system considers
-# the session sufficient.
+# Target minutes for a good cardio session.
+CARDIO_TARGET_DURATION: dict[str, int] = {
+    "beginner": 25,
+    "intermediate": 35,
+    "advanced": 45,
+}
+
+# Intensity multiplier for cardio effort.
+CARDIO_INTENSITY_MULTIPLIERS: dict[str, float] = {
+    "low": 0.7,
+    "moderate": 1.0,
+    "high": 1.3,
+}
+
+# Goals that should be evaluated primarily/partially via cardio.
+CARDIO_PRIMARY_GOALS = {"improve_endurance"}
+CARDIO_SECONDARY_GOALS = {"lose_weight", "improve_fitness", "maintain_weight"}
+STRENGTH_PRIMARY_GOALS = {"build_muscle", "get_stronger", "gain_weight"}
+
+# ──────────────────────────────────────────────────────────────────────
+# SESSION-LEVEL CAPS (safety thresholds, not sole adequacy criteria)
+# ──────────────────────────────────────────────────────────────────────
+
+# Maximum total effective sets per session before suggesting "enough."
+# These serve as an upper safety bound, NOT the primary adequacy test.
 MAX_SETS_PER_SESSION: dict[str, int] = {
-    "beginner": 12,
-    "intermediate": 18,
-    "advanced": 24,
+    "beginner": 15,
+    "intermediate": 22,
+    "advanced": 30,
 }
 
 # Movement pattern groupings for split-awareness.
-# If a user has done exercises from a push pattern,
-# don't suddenly recommend 5 pull exercises in the same session.
 PUSH_PATTERNS = {"horizontal_push", "vertical_push"}
 PULL_PATTERNS = {"horizontal_pull", "vertical_pull"}
 LEG_PATTERNS = {"squat", "hinge", "lunge"}
@@ -187,10 +207,56 @@ class MuscleVolume:
 
 
 @dataclass
+class CardioStatus:
+    """Cardio session adequacy for a single day."""
+    total_duration_minutes: float = 0.0
+    effective_duration_minutes: float = 0.0  # adjusted by intensity
+    target_minutes: float = 30.0
+    min_minutes: float = 15.0
+    has_meaningful_cardio: bool = False
+    # Percentage of target achieved (0.0 to 1.0+)
+    completion_ratio: float = 0.0
+
+
+@dataclass
+class SessionAdequacy:
+    """
+    Answers: has this SINGLE SESSION been sufficient?
+
+    Separate from weekly progress.
+    """
+    is_adequate: bool = False
+    # How confident are we? (low = missing data, medium = partial,
+    # high = clear evidence)
+    confidence: str = "low"  # "low" | "medium" | "high"
+    reason: str = ""
+    # Which categories of work contributed to this assessment
+    has_strength_work: bool = False
+    has_cardio_work: bool = False
+    strength_sets_done: float = 0.0
+    muscle_groups_hit: int = 0
+    cardio_status: CardioStatus = field(default_factory=CardioStatus)
+
+
+@dataclass
+class WeeklyProgress:
+    """
+    Answers: how is the user progressing across the whole week?
+
+    Separate from session adequacy.
+    """
+    muscle_volumes: dict[str, MuscleVolume] = field(default_factory=dict)
+    overall_status: str = "insufficient"  # insufficient | adequate | high
+    trained_days_this_week: int = 0
+    training_days_target: int = 3
+    is_rest_day_eligible: bool = False
+
+
+@dataclass
 class TrainingAdequacy:
     """Complete training adequacy evaluation result."""
     overall_status: str = "insufficient"  # insufficient | adequate | high
-    session_action: str = "continue_workout"  # continue_workout | workout_adequate | prioritize_next_session | rest
+    session_action: str = "continue_workout"  # continue_workout | workout_adequate | rest
     muscle_volumes: dict[str, MuscleVolume] = field(default_factory=dict)
     recommended_next: list[str] = field(default_factory=list)
     summary: str = ""
@@ -198,6 +264,9 @@ class TrainingAdequacy:
     exercises_today: int = 0
     total_sets_today: float = 0.0
     detected_split: str | None = None  # "upper" | "lower" | "full" | None
+    # New: separated sub-evaluations
+    session_adequacy: SessionAdequacy = field(default_factory=SessionAdequacy)
+    weekly_progress: WeeklyProgress = field(default_factory=WeeklyProgress)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -334,68 +403,465 @@ def detect_session_split(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# MAIN EVALUATION FUNCTION
+# CARDIO EVALUATION
 # ──────────────────────────────────────────────────────────────────────
 
-def evaluate_training_adequacy(
-    session: Session,
-    user_id: int,
-    goal: UserGoal | None,
-    today: Date | None = None,
-) -> TrainingAdequacy:
+def evaluate_cardio_session(
+    exercises: list[Exercise],
+    experience: str,
+) -> CardioStatus:
     """
-    Evaluate the user's training adequacy for the current week.
+    Evaluate cardio adequacy for a set of exercises using duration,
+    distance, and intensity — NOT strength-training set counts.
 
-    This is the main entry point for the training adequacy system.
-
-    Returns a TrainingAdequacy object containing:
-    - Overall status (insufficient/adequate/high)
-    - Session action recommendation
-    - Per-muscle-group breakdown
-    - Recommended next exercises
-    - Summary and detail text
+    Only considers exercises categorised as "cardio".
     """
-    if today is None:
-        today = Date.today()
+    target = CARDIO_TARGET_DURATION.get(experience, 30)
+    minimum = CARDIO_MIN_DURATION.get(experience, 15)
 
-    # Load muscle mappings
-    mappings_by_catalog_id = get_muscle_mappings(session)
-
-    # Fetch today's exercises
-    today_exercises: list[Exercise] = list(session.exec(
-        select(Exercise).where(
-            Exercise.user_id == user_id,
-            Exercise.date == today,
-            Exercise.deleted_at.is_(None),
-        )
-    ).all())
-
-    # Fetch this week's exercises (Monday through today)
-    monday = today - timedelta(days=today.weekday())
-    week_exercises: list[Exercise] = list(session.exec(
-        select(Exercise).where(
-            Exercise.user_id == user_id,
-            Exercise.date >= monday,
-            Exercise.date <= today,
-            Exercise.deleted_at.is_(None),
-        )
-    ).all())
-
-    # Calculate weekly targets
-    targets = calculate_weekly_targets(goal)
-
-    # Aggregate weekly volume
-    weekly_volume = aggregate_volume(week_exercises, mappings_by_catalog_id)
-
-    # Total sets today (raw count)
-    total_sets_today = sum(
-        (ex.sets or 0)
-        for ex in today_exercises
-        if ex.sets is not None and ex.sets > 0
+    status = CardioStatus(
+        target_minutes=float(target),
+        min_minutes=float(minimum),
     )
 
-    # Detect session split
-    detected_split = detect_session_split(today_exercises, mappings_by_catalog_id)
+    cardio_exercises = [e for e in exercises if (e.category or "").lower() == "cardio"]
+
+    if not cardio_exercises:
+        return status
+
+    total_raw = 0.0
+    total_effective = 0.0
+
+    for ex in cardio_exercises:
+        duration = ex.duration_minutes or 0
+        if duration <= 0:
+            # Cardio with no duration — we cannot evaluate, but don't
+            # ignore it entirely. Give minimal credit.
+            duration = 5  # assume at least 5 minutes if they logged it
+
+        intensity = (ex.intensity or "moderate").lower()
+        multiplier = CARDIO_INTENSITY_MULTIPLIERS.get(intensity, 1.0)
+
+        # Distance bonus: if they logged distance, give a small boost
+        # for longer-distance sessions.
+        distance_bonus = 0.0
+        if ex.distance_km and ex.distance_km > 0:
+            # e.g. 5km adds ~5 effective minutes worth of credit
+            distance_bonus = min(ex.distance_km * 1.0, 10.0)
+
+        raw = float(duration)
+        effective = raw * multiplier + distance_bonus
+
+        total_raw += raw
+        total_effective += effective
+
+    status.total_duration_minutes = round(total_raw, 1)
+    status.effective_duration_minutes = round(total_effective, 1)
+    status.has_meaningful_cardio = total_effective >= minimum
+    status.completion_ratio = round(total_effective / max(target, 1.0), 2)
+
+    return status
+
+
+# ──────────────────────────────────────────────────────────────────────
+# SESSION ADEQUACY (today's workout only)
+# ──────────────────────────────────────────────────────────────────────
+
+def evaluate_session_adequacy(
+    exercises: list[Exercise],
+    goal: UserGoal | None,
+    mappings_by_catalog_id: dict[int, list[ExerciseMuscleMapping]],
+) -> SessionAdequacy:
+    """
+    Evaluate whether the CURRENT SESSION has sufficient work.
+
+    This is INDEPENDENT of weekly progress. A session can be adequate
+    even when weekly targets are not yet met, and vice versa.
+
+    The evaluation is goal-aware:
+    - Strength goals: evaluate by working sets, muscle coverage, effort
+    - Cardio goals: evaluate by duration, intensity, distance
+    - Mixed goals: evaluate both dimensions
+    """
+    if not exercises:
+        return SessionAdequacy(
+            is_adequate=False,
+            confidence="high",
+            reason="No exercises logged yet.",
+        )
+
+    goal_type = (goal.goal_type or "improve_fitness").lower() if goal else "improve_fitness"
+    experience = (goal.training_experience or "beginner").lower() if goal else "beginner"
+
+    # Split exercises by category
+    strength_exercises = [
+        e for e in exercises
+        if (e.category or "").lower() in ("strength", "other")
+        and e.sets is not None and e.sets > 0
+    ]
+    cardio_exercises = [
+        e for e in exercises
+        if (e.category or "").lower() == "cardio"
+    ]
+    other_exercises = [
+        e for e in exercises
+        if (e.category or "").lower() not in ("strength", "cardio", "other")
+        or ((e.category or "").lower() in ("strength", "other") and (e.sets is None or e.sets <= 0))
+    ]
+
+    # Calculate strength metrics for this session
+    session_volume = aggregate_volume(strength_exercises, mappings_by_catalog_id)
+    total_effective_sets = sum(session_volume.values())
+    muscle_groups_hit = len([mg for mg, v in session_volume.items() if v > 0])
+
+    # Count exercises with missing mappings
+    unmapped_strength = sum(
+        1 for e in strength_exercises
+        if e.exercise_catalog_id is None
+        or not mappings_by_catalog_id.get(e.exercise_catalog_id, [])
+    )
+    total_raw_sets = sum(e.sets or 0 for e in strength_exercises)
+
+    # Evaluate cardio
+    cardio_status = evaluate_cardio_session(exercises, experience)
+
+    has_strength = len(strength_exercises) > 0
+    has_cardio = cardio_status.has_meaningful_cardio
+
+    # Determine adequacy based on goal type
+    is_adequate = False
+    confidence = "medium"
+    reason_parts = []
+
+    max_session_sets = MAX_SETS_PER_SESSION.get(experience, 22)
+
+    if goal_type in STRENGTH_PRIMARY_GOALS:
+        # Strength-focused evaluation
+        is_adequate, confidence, reason_parts = _evaluate_strength_session(
+            total_effective_sets=total_effective_sets,
+            total_raw_sets=total_raw_sets,
+            muscle_groups_hit=muscle_groups_hit,
+            unmapped_strength=unmapped_strength,
+            max_session_sets=max_session_sets,
+            experience=experience,
+            strength_exercises=strength_exercises,
+        )
+        # Cardio adds value but doesn't define adequacy for strength goals
+        if has_cardio and not is_adequate:
+            reason_parts.append(
+                f"Cardio: {cardio_status.total_duration_minutes:.0f}min (good, but strength work is primary for your goal)."
+            )
+
+    elif goal_type in CARDIO_PRIMARY_GOALS:
+        # Cardio-focused evaluation — NOT using set counts
+        is_adequate, confidence, reason_parts = _evaluate_cardio_session_adequacy(
+            cardio_status=cardio_status,
+            experience=experience,
+        )
+        # Strength adds value but doesn't define adequacy for cardio goals
+        if has_strength and not is_adequate:
+            reason_parts.append(
+                f"Strength: {total_effective_sets:.1f} effective sets logged — good supplementary work."
+            )
+
+    else:
+        # Mixed goals (improve_fitness, lose_weight, maintain_weight)
+        is_adequate, confidence, reason_parts = _evaluate_mixed_session(
+            total_effective_sets=total_effective_sets,
+            total_raw_sets=total_raw_sets,
+            muscle_groups_hit=muscle_groups_hit,
+            unmapped_strength=unmapped_strength,
+            max_session_sets=max_session_sets,
+            experience=experience,
+            cardio_status=cardio_status,
+            has_strength=has_strength,
+            has_cardio=has_cardio,
+            strength_exercises=strength_exercises,
+        )
+
+    # If exercises exist with no sets and no duration, lower confidence
+    if other_exercises and not has_strength and not has_cardio:
+        confidence = "low"
+        reason_parts.append(
+            f"{len(other_exercises)} exercise(s) logged without clear sets or duration — "
+            "unable to fully evaluate the session."
+        )
+
+    return SessionAdequacy(
+        is_adequate=is_adequate,
+        confidence=confidence,
+        reason=" ".join(reason_parts),
+        has_strength_work=has_strength,
+        has_cardio_work=has_cardio,
+        strength_sets_done=total_effective_sets,
+        muscle_groups_hit=muscle_groups_hit,
+        cardio_status=cardio_status,
+    )
+
+
+MIN_DISTINCT_STRENGTH_EXERCISES = 2
+
+
+def _distinct_exercise_count(exercises: list[Exercise]) -> int:
+    """Number of distinct exercises (by catalog id, falling back to name)."""
+    keys = set()
+    for ex in exercises:
+        cat_id = getattr(ex, "exercise_catalog_id", None)
+        keys.add(cat_id if cat_id else (ex.name or "").strip().lower())
+    return len(keys)
+
+
+def _evaluate_strength_session(
+    total_effective_sets: float,
+    total_raw_sets: float,
+    muscle_groups_hit: int,
+    unmapped_strength: int,
+    max_session_sets: int,
+    experience: str,
+    strength_exercises: list[Exercise],
+) -> tuple[bool, str, list[str]]:
+    """Evaluate whether a strength-focused session is adequate."""
+    reason_parts: list[str] = []
+    confidence = "medium"
+    distinct_exercises = _distinct_exercise_count(strength_exercises)
+    enough_variety = distinct_exercises >= MIN_DISTINCT_STRENGTH_EXERCISES
+
+    # Minimum thresholds for a session (NOT weekly targets)
+    # These are deliberately lower than weekly targets — a single session
+    # doesn't need to satisfy the entire week.
+    if experience == "beginner":
+        min_effective_sets = 6.0
+        min_muscle_groups = 2
+    elif experience == "intermediate":
+        min_effective_sets = 8.0
+        min_muscle_groups = 2
+    else:
+        min_effective_sets = 10.0
+        min_muscle_groups = 2
+
+    # Hit the safety cap? Definitely adequate.
+    if total_effective_sets >= max_session_sets:
+        return True, "high", [
+            f"{total_effective_sets:.0f} effective sets across {muscle_groups_hit} muscle groups — "
+            "you've done substantial work this session."
+        ]
+
+    # Enough effective sets AND enough muscle group spread?
+    if (
+        total_effective_sets >= min_effective_sets
+        and muscle_groups_hit >= min_muscle_groups
+        and enough_variety
+    ):
+        confidence = "high" if unmapped_strength == 0 else "medium"
+        reason_parts.append(
+            f"{total_effective_sets:.0f} effective sets across {muscle_groups_hit} muscle groups — "
+            "session is looking solid."
+        )
+        return True, confidence, reason_parts
+
+    # Handle the case where exercises have no muscle mappings
+    # but the raw set count is reasonable
+    if unmapped_strength > 0 and total_raw_sets >= min_effective_sets:
+        confidence = "low"
+        reason_parts.append(
+            f"{total_raw_sets} raw sets logged, but {unmapped_strength} exercise(s) "
+            "have no muscle-group data — session may be adequate but cannot be confirmed."
+        )
+        # Be lenient: if raw sets are well above threshold, accept it
+        if total_raw_sets >= min_effective_sets * 1.5 and enough_variety:
+            return True, confidence, reason_parts
+        return False, confidence, reason_parts
+
+    # Volume is there but it all came from a single exercise —
+    # secondary-muscle credit alone shouldn't complete a session.
+    if total_effective_sets >= min_effective_sets and not enough_variety:
+        reason_parts.append(
+            f"{total_effective_sets:.0f} effective sets so far, but from only one exercise — "
+            f"add at least one more exercise to round out the session."
+        )
+        return False, confidence, reason_parts
+
+    # Not enough work yet
+    if total_effective_sets > 0:
+        reason_parts.append(
+            f"{total_effective_sets:.0f} effective sets across {muscle_groups_hit} muscle group(s) so far — "
+            f"aim for at least {min_effective_sets:.0f} sets."
+        )
+    else:
+        if strength_exercises:
+            reason_parts.append(
+                f"{len(strength_exercises)} exercise(s) logged but no effective volume tracked "
+                "(missing muscle mappings or sets)."
+            )
+        else:
+            reason_parts.append("No strength exercises logged yet for your strength-focused goal.")
+
+    return False, confidence, reason_parts
+
+
+def _evaluate_cardio_session_adequacy(
+    cardio_status: CardioStatus,
+    experience: str,
+) -> tuple[bool, str, list[str]]:
+    """Evaluate whether a cardio-focused session is adequate."""
+    reason_parts: list[str] = []
+
+    if not cardio_status.has_meaningful_cardio:
+        if cardio_status.total_duration_minutes > 0:
+            reason_parts.append(
+                f"{cardio_status.total_duration_minutes:.0f}min of cardio logged, "
+                f"but the minimum for a meaningful session is {cardio_status.min_minutes:.0f}min."
+            )
+        else:
+            reason_parts.append("No cardio logged yet for your endurance goal.")
+        return False, "medium", reason_parts
+
+    # Meaningful cardio exists — check against target
+    if cardio_status.completion_ratio >= 0.85:
+        reason_parts.append(
+            f"{cardio_status.effective_duration_minutes:.0f} effective minutes of cardio "
+            f"(target: {cardio_status.target_minutes:.0f}min) — great session."
+        )
+        return True, "high", reason_parts
+    elif cardio_status.completion_ratio >= 0.6:
+        reason_parts.append(
+            f"{cardio_status.effective_duration_minutes:.0f} effective minutes of cardio "
+            f"(target: {cardio_status.target_minutes:.0f}min) — decent effort, consider continuing."
+        )
+        return False, "medium", reason_parts
+    else:
+        reason_parts.append(
+            f"{cardio_status.effective_duration_minutes:.0f} effective minutes of cardio "
+            f"(target: {cardio_status.target_minutes:.0f}min) — keep going for a fuller session."
+        )
+        return False, "medium", reason_parts
+
+
+def _evaluate_mixed_session(
+    total_effective_sets: float,
+    total_raw_sets: float,
+    muscle_groups_hit: int,
+    unmapped_strength: int,
+    max_session_sets: int,
+    experience: str,
+    cardio_status: CardioStatus,
+    has_strength: bool,
+    has_cardio: bool,
+    strength_exercises: list[Exercise],
+) -> tuple[bool, str, list[str]]:
+    """
+    Evaluate a session for mixed goals (fitness, weight loss, maintenance).
+
+    Either strength OR cardio work can contribute to adequacy.
+    Both together is even better.
+    """
+    reason_parts: list[str] = []
+
+    # Lower thresholds for mixed goals — the user doesn't need
+    # a full powerlifting session or a full cardio session.
+    if experience == "beginner":
+        min_sets = 4.0
+        min_cardio_ratio = 0.6
+    elif experience == "intermediate":
+        min_sets = 6.0
+        min_cardio_ratio = 0.65
+    else:
+        min_sets = 8.0
+        min_cardio_ratio = 0.7
+
+    enough_variety = _distinct_exercise_count(strength_exercises) >= MIN_DISTINCT_STRENGTH_EXERCISES
+    strength_adequate = (
+        total_effective_sets >= min_sets and muscle_groups_hit >= 2 and enough_variety
+    )
+    cardio_adequate = cardio_status.completion_ratio >= min_cardio_ratio
+
+    # Combined work — both contribute
+    if has_strength and has_cardio:
+        if strength_adequate or cardio_adequate:
+            parts = []
+            if has_strength:
+                parts.append(f"{total_effective_sets:.0f} sets")
+            if has_cardio:
+                parts.append(f"{cardio_status.effective_duration_minutes:.0f}min cardio")
+            reason_parts.append(
+                f"Mixed session: {' + '.join(parts)} — well-rounded workout."
+            )
+            return True, "high", reason_parts
+        else:
+            parts = []
+            if has_strength:
+                parts.append(f"{total_effective_sets:.0f} effective sets")
+            if has_cardio:
+                parts.append(f"{cardio_status.effective_duration_minutes:.0f}min cardio")
+            reason_parts.append(
+                f"Mixed session: {' + '.join(parts)} — consider adding a bit more work."
+            )
+            return False, "medium", reason_parts
+
+    # Strength only
+    if has_strength:
+        if total_effective_sets >= max_session_sets:
+            reason_parts.append(f"{total_effective_sets:.0f} effective sets — substantial session.")
+            return True, "high", reason_parts
+        if strength_adequate:
+            reason_parts.append(
+                f"{total_effective_sets:.0f} effective sets across {muscle_groups_hit} muscle groups."
+            )
+            return True, "medium" if unmapped_strength > 0 else "high", reason_parts
+        # Handle unmapped exercises
+        if unmapped_strength > 0 and total_raw_sets >= min_sets:
+            reason_parts.append(
+                f"{total_raw_sets} raw sets but {unmapped_strength} unmapped exercise(s)."
+            )
+            if total_raw_sets >= min_sets * 1.5 and enough_variety:
+                return True, "low", reason_parts
+        if total_effective_sets > 0:
+            reason_parts.append(
+                f"{total_effective_sets:.0f} effective sets so far — aim for {min_sets:.0f}+."
+            )
+        else:
+            reason_parts.append("Strength exercises logged but no effective volume tracked.")
+        return False, "medium" if total_effective_sets > 0 else "low", reason_parts
+
+    # Cardio only
+    if has_cardio:
+        if cardio_adequate:
+            reason_parts.append(
+                f"{cardio_status.effective_duration_minutes:.0f}min of cardio — solid session."
+            )
+            return True, "high", reason_parts
+        reason_parts.append(
+            f"{cardio_status.effective_duration_minutes:.0f}min of cardio "
+            f"(target: {cardio_status.target_minutes:.0f}min)."
+        )
+        return False, "medium", reason_parts
+
+    # Nothing meaningful
+    reason_parts.append("No meaningful strength or cardio work detected yet.")
+    return False, "low", reason_parts
+
+
+# ──────────────────────────────────────────────────────────────────────
+# WEEKLY PROGRESS EVALUATION
+# ──────────────────────────────────────────────────────────────────────
+
+def evaluate_weekly_progress(
+    week_exercises: list[Exercise],
+    goal: UserGoal | None,
+    mappings_by_catalog_id: dict[int, list[ExerciseMuscleMapping]],
+    today: Date,
+) -> WeeklyProgress:
+    """
+    Evaluate the user's weekly training progress.
+
+    This is SEPARATE from session adequacy. Weekly progress tracks
+    cumulative muscle-group volume and training frequency across
+    the whole week.
+    """
+    targets = calculate_weekly_targets(goal)
+    weekly_volume = aggregate_volume(week_exercises, mappings_by_catalog_id)
+    training_days = (goal.training_days_per_week or 3) if goal else 3
+    trained_days = len({e.date for e in week_exercises})
 
     # Build per-muscle-group status
     muscle_volumes: dict[str, MuscleVolume] = {}
@@ -411,53 +877,186 @@ def evaluate_training_adequacy(
         muscle_volumes[mg] = mv
 
     # Determine overall status
-    undertrained = [mv for mv in muscle_volumes.values() if mv.status == "undertrained"]
-    adequate = [mv for mv in muscle_volumes.values() if mv.status == "adequate"]
-    high = [mv for mv in muscle_volumes.values() if mv.status == "high"]
+    adequate_count = sum(1 for mv in muscle_volumes.values() if mv.status in ("adequate", "high"))
+    high_count = sum(1 for mv in muscle_volumes.values() if mv.status == "high")
+    total = len(ALL_MUSCLE_GROUPS)
 
-    if len(adequate) + len(high) >= len(ALL_MUSCLE_GROUPS) * 0.7:
+    if adequate_count >= total * 0.7:
         overall_status = "adequate"
-    elif len(high) > len(ALL_MUSCLE_GROUPS) * 0.5:
+    elif high_count > total * 0.5:
         overall_status = "high"
     else:
         overall_status = "insufficient"
 
-    # Determine session action
-    experience = (goal.training_experience or "beginner").lower() if goal else "beginner"
-    training_days = (goal.training_days_per_week or 3) if goal else 3
+    # Is it reasonable to suggest a rest day?
+    is_rest_eligible = trained_days >= training_days
 
-    max_exercises = MAX_EXERCISES_PER_SESSION.get(training_days, 5)
-    max_session_sets = MAX_SETS_PER_SESSION.get(experience, 18)
+    return WeeklyProgress(
+        muscle_volumes=muscle_volumes,
+        overall_status=overall_status,
+        trained_days_this_week=trained_days,
+        training_days_target=training_days,
+        is_rest_day_eligible=is_rest_eligible,
+    )
 
-    # Check if the user has trained enough days this week already
-    trained_days_this_week = len({e.date for e in week_exercises})
 
-    session_action = "continue_workout"
-    if len(today_exercises) == 0:
-        # No exercises today
-        if trained_days_this_week >= training_days:
-            session_action = "rest"
-        else:
-            session_action = "continue_workout"
-    elif len(today_exercises) >= max_exercises or total_sets_today >= max_session_sets:
-        # Session has enough work
-        session_action = "workout_adequate"
-    elif overall_status == "adequate" or overall_status == "high":
-        # Weekly targets largely met
-        if len(today_exercises) >= 2:
-            session_action = "workout_adequate"
-        else:
-            session_action = "continue_workout"
-    else:
-        # More work could be done
-        session_action = "continue_workout"
+# ──────────────────────────────────────────────────────────────────────
+# SESSION GROUPING
+# ──────────────────────────────────────────────────────────────────────
+
+def get_current_session_exercises(
+    session: Session,
+    user_id: int,
+    today: Date,
+) -> list[Exercise]:
+    """
+    Get exercises for the user's current workout session.
+
+    Uses WorkoutSession grouping when an active/completed session
+    exists. Falls back to date-based grouping otherwise.
+
+    Abandoned sessions are NOT included — their exercises are excluded
+    from the current session evaluation (though they remain in the DB
+    for history).
+    """
+    # Check for an active or completed workout session today
+    active_session: WorkoutSession | None = session.exec(
+        select(WorkoutSession).where(
+            WorkoutSession.user_id == user_id,
+            WorkoutSession.date == today,
+            WorkoutSession.status.in_(["active", "completed"]),
+        )
+    ).first()
+
+    if active_session:
+        # Use session-based grouping: only exercises linked to this session
+        exercises = list(session.exec(
+            select(Exercise).where(
+                Exercise.user_id == user_id,
+                Exercise.workout_session_id == active_session.id,
+                Exercise.deleted_at.is_(None),
+            )
+        ).all())
+
+        # Also include today's exercises with no session ID
+        # (backward compatibility with exercises logged before sessions existed)
+        unlinked = list(session.exec(
+            select(Exercise).where(
+                Exercise.user_id == user_id,
+                Exercise.date == today,
+                Exercise.workout_session_id.is_(None),
+                Exercise.deleted_at.is_(None),
+            )
+        ).all())
+
+        return exercises + unlinked
+
+    # No explicit session — fall back to date-based grouping,
+    # but exclude exercises linked to abandoned sessions.
+    abandoned_session_ids: list[int] = [
+        ws.id for ws in session.exec(
+            select(WorkoutSession).where(
+                WorkoutSession.user_id == user_id,
+                WorkoutSession.date == today,
+                WorkoutSession.status == "abandoned",
+            )
+        ).all()
+    ]
+
+    query = select(Exercise).where(
+        Exercise.user_id == user_id,
+        Exercise.date == today,
+        Exercise.deleted_at.is_(None),
+    )
+
+    if abandoned_session_ids:
+        # Exclude exercises from abandoned sessions
+        query = query.where(
+            ~Exercise.workout_session_id.in_(abandoned_session_ids)
+            | Exercise.workout_session_id.is_(None)
+        )
+
+    return list(session.exec(query).all())
+
+
+# ──────────────────────────────────────────────────────────────────────
+# MAIN EVALUATION FUNCTION
+# ──────────────────────────────────────────────────────────────────────
+
+def evaluate_training_adequacy(
+    session: Session,
+    user_id: int,
+    goal: UserGoal | None,
+    today: Date | None = None,
+) -> TrainingAdequacy:
+    """
+    Evaluate the user's training adequacy.
+
+    This is the main entry point. It answers TWO separate questions:
+    1. Session adequacy: Is today's workout sufficient?
+    2. Weekly progress: How is the user progressing this week?
+
+    Then combines them into an actionable session_action recommendation.
+    """
+    if today is None:
+        today = Date.today()
+
+    # Load muscle mappings
+    mappings_by_catalog_id = get_muscle_mappings(session)
+
+    # Get current session exercises (respects WorkoutSession grouping)
+    today_exercises = get_current_session_exercises(session, user_id, today)
+
+    # Fetch this week's exercises (Monday through today)
+    monday = today - timedelta(days=today.weekday())
+    week_exercises: list[Exercise] = list(session.exec(
+        select(Exercise).where(
+            Exercise.user_id == user_id,
+            Exercise.date >= monday,
+            Exercise.date <= today,
+            Exercise.deleted_at.is_(None),
+        )
+    ).all())
+
+    # Total raw sets today
+    total_sets_today = sum(
+        (ex.sets or 0)
+        for ex in today_exercises
+        if ex.sets is not None and ex.sets > 0
+    )
+
+    # Detect session split
+    detected_split = detect_session_split(today_exercises, mappings_by_catalog_id)
+
+    # ── EVALUATE SESSION ADEQUACY (today's workout) ──────────────
+    sess_adequacy = evaluate_session_adequacy(
+        exercises=today_exercises,
+        goal=goal,
+        mappings_by_catalog_id=mappings_by_catalog_id,
+    )
+
+    # ── EVALUATE WEEKLY PROGRESS ─────────────────────────────────
+    weekly = evaluate_weekly_progress(
+        week_exercises=week_exercises,
+        goal=goal,
+        mappings_by_catalog_id=mappings_by_catalog_id,
+        today=today,
+    )
+
+    # ── COMBINE INTO SESSION ACTION ──────────────────────────────
+    # These two evaluations inform each other but are NOT equivalent.
+    session_action = _determine_session_action(
+        session_adequacy=sess_adequacy,
+        weekly_progress=weekly,
+        exercises_today=today_exercises,
+    )
 
     # Generate recommendations for what to do next
     recommended_next = _generate_next_recommendations(
         session=session,
         goal=goal,
         today_exercises=today_exercises,
-        muscle_volumes=muscle_volumes,
+        muscle_volumes=weekly.muscle_volumes,
         detected_split=detected_split,
         mappings_by_catalog_id=mappings_by_catalog_id,
         session_action=session_action,
@@ -466,27 +1065,64 @@ def evaluate_training_adequacy(
     # Generate summary and detail text
     summary, detail = _generate_adequacy_text(
         today_exercises=today_exercises,
-        muscle_volumes=muscle_volumes,
+        session_adequacy=sess_adequacy,
+        weekly_progress=weekly,
         session_action=session_action,
         detected_split=detected_split,
         recommended_next=recommended_next,
         goal=goal,
-        trained_days_this_week=trained_days_this_week,
-        training_days=training_days,
     )
 
     return TrainingAdequacy(
-        overall_status=overall_status,
+        overall_status=weekly.overall_status,
         session_action=session_action,
-        muscle_volumes=muscle_volumes,
+        muscle_volumes=weekly.muscle_volumes,
         recommended_next=recommended_next,
         summary=summary,
         detail=detail,
         exercises_today=len(today_exercises),
         total_sets_today=total_sets_today,
         detected_split=detected_split,
+        session_adequacy=sess_adequacy,
+        weekly_progress=weekly,
     )
 
+
+def _determine_session_action(
+    session_adequacy: SessionAdequacy,
+    weekly_progress: WeeklyProgress,
+    exercises_today: list[Exercise],
+) -> str:
+    """
+    Determine the recommended session action by combining session
+    adequacy and weekly progress.
+
+    Rules:
+    - No exercises today + weekly frequency met → rest
+    - No exercises today + weekly frequency not met → continue_workout
+    - Session adequate → workout_adequate
+    - Session not adequate → continue_workout
+    - Weekly targets met does NOT automatically mean session is done
+    - Weekly targets not met does NOT automatically mean session must continue
+    """
+    has_exercises = len(exercises_today) > 0
+
+    if not has_exercises:
+        if weekly_progress.is_rest_day_eligible:
+            return "rest"
+        return "continue_workout"
+
+    # If the session is explicitly adequate, trust that evaluation
+    if session_adequacy.is_adequate:
+        return "workout_adequate"
+
+    # Session is not adequate — keep going
+    return "continue_workout"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# NEXT RECOMMENDATIONS
+# ──────────────────────────────────────────────────────────────────────
 
 def _generate_next_recommendations(
     session: Session,
@@ -578,15 +1214,18 @@ def _get_relevant_muscles_for_split(detected_split: str | None) -> set[str]:
         return set(ALL_MUSCLE_GROUPS)
 
 
+# ──────────────────────────────────────────────────────────────────────
+# TEXT GENERATION
+# ──────────────────────────────────────────────────────────────────────
+
 def _generate_adequacy_text(
     today_exercises: list[Exercise],
-    muscle_volumes: dict[str, MuscleVolume],
+    session_adequacy: SessionAdequacy,
+    weekly_progress: WeeklyProgress,
     session_action: str,
     detected_split: str | None,
     recommended_next: list[str],
     goal: UserGoal | None,
-    trained_days_this_week: int,
-    training_days: int,
 ) -> tuple[str, str]:
     """Generate human-readable summary and detail text."""
 
@@ -596,14 +1235,14 @@ def _generate_adequacy_text(
         if session_action == "rest":
             summary = "Rest Day"
             detail = (
-                f"You've already trained {trained_days_this_week} days this week "
-                f"(target: {training_days}). Take a rest day to recover."
+                f"You've already trained {weekly_progress.trained_days_this_week} days this week "
+                f"(target: {weekly_progress.training_days_target}). Take a rest day to recover."
             )
         else:
             summary = "Ready to Train"
             # Find most undertrained muscles
             undertrained = sorted(
-                [mv for mv in muscle_volumes.values() if mv.status == "undertrained"],
+                [mv for mv in weekly_progress.muscle_volumes.values() if mv.status == "undertrained"],
                 key=lambda mv: mv.effective_sets / max(mv.target_min, 0.1),
             )
             if undertrained:
@@ -618,48 +1257,29 @@ def _generate_adequacy_text(
 
     if session_action == "workout_adequate":
         summary = "Workout Adequate"
-        # Find what was well-trained
-        trained_today_muscles = set()
-        for mv in muscle_volumes.values():
-            if mv.effective_sets > 0 and mv.status in ("adequate", "high"):
-                trained_today_muscles.add(mv.muscle_group)
+        # Use the session adequacy reason which explains WHY it's adequate
+        detail = session_adequacy.reason
 
-        if trained_today_muscles:
-            trained_str = ", ".join(sorted(mg.replace("_", "/") for mg in trained_today_muscles))
-            detail = f"Good work! {trained_str} received sufficient stimulus."
-        else:
-            detail = "You've done enough work for this session."
-
-        # Add info about what needs attention next
-        undertrained = [mv for mv in muscle_volumes.values() if mv.status == "undertrained"]
+        # Add weekly context
+        undertrained = [mv for mv in weekly_progress.muscle_volumes.values() if mv.status == "undertrained"]
         if undertrained:
-            # Pick the 2-3 most undertrained
-            names = sorted(
-                [mv.muscle_group.replace("_", "/") for mv in undertrained[:3]]
-            )
+            names = sorted([mv.muscle_group.replace("_", "/") for mv in undertrained[:3]])
             detail += f" Next session, prioritize: {', '.join(names)}."
 
     elif session_action == "continue_workout":
         summary = "Keep Going"
+        # Use the session adequacy reason which explains what's needed
+        detail = session_adequacy.reason
+
         # What has been done
         done_str = ", ".join(exercise_names[:3])
         if len(exercise_names) > 3:
             done_str += f" (+{len(exercise_names) - 3} more)"
 
-        # What needs more work
-        target_muscles = _get_relevant_muscles_for_split(detected_split)
-        still_needed = [
-            mv for mv in muscle_volumes.values()
-            if mv.status == "undertrained" and mv.muscle_group in target_muscles
-        ]
-
-        if still_needed:
-            needed_str = ", ".join(
-                mv.muscle_group.replace("_", "/") for mv in still_needed[:3]
-            )
-            detail = f"Logged: {done_str}. Still needs attention: {needed_str}."
+        if detail:
+            detail = f"Logged: {done_str}. {detail}"
         else:
-            detail = f"Logged: {done_str}. Looking good — consider a few more sets or wrap up."
+            detail = f"Logged: {done_str}."
 
     else:  # rest
         summary = "Rest Day"

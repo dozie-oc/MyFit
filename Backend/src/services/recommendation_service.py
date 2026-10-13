@@ -1,4 +1,4 @@
-"""
+﻿"""
 Deterministic recommendation engine.
 
 Gathers the user's goal, profile, today's meals, today's nutrition totals,
@@ -22,9 +22,9 @@ from src.models import (
 from src.schemas import RecommendationItem, RecommendationResponse
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # CONSTANTS & MAPPINGS
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # Multipliers for estimated daily maintenance calories by activity level (kcal per kg bodyweight)
 ACTIVITY_CALORIE_MULTIPLIERS: dict[str, float] = {
@@ -115,9 +115,9 @@ DAIRY_EGG_KEYWORDS: set[str] = {
 }
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # NUTRITION & TARGET HELPERS
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _calculate_targets(user: User, goal: UserGoal | None) -> tuple[int, int]:
     """Calculate daily calorie and protein targets based on goal, weight, and activity level."""
@@ -182,9 +182,9 @@ def _is_food_allowed(food_name: str, dietary_pref: str, avoid_list: list[str]) -
     return True
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # MEAL RECOMMENDATION
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _determine_next_meal_type(today_meals: list[Meal]) -> str:
     """
@@ -376,9 +376,9 @@ def _recommend_meal(
     )
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # EXERCISE RECOMMENDATION
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _is_exercise_equipment_compatible(
     exercise_name: str,
@@ -532,17 +532,17 @@ def _recommend_exercise(
 
     detail_parts = []
     if sets and reps:
-        detail_parts.append(f"{sets} sets × {reps} reps")
+        detail_parts.append(f"{sets} sets Ã— {reps} reps")
     if duration:
         detail_parts.append(f"{duration} minutes")
-    detail_str = " · ".join(detail_parts)
+    detail_str = " Â· ".join(detail_parts)
 
     reason = f"Based on your '{goal_type.replace('_', ' ')}' goal and {experience} experience"
     if done_names:
         done_str = ", ".join(list(done_names)[:2])
         reason += f" (already logged: {done_str})"
     else:
-        reason += " — you haven't exercised yet today"
+        reason += " â€” you haven't exercised yet today"
     if detail_str:
         reason += f". Suggested: {detail_str}."
 
@@ -555,9 +555,9 @@ def _recommend_exercise(
     )
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # MAIN ENGINE
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def get_recommendation(
     session: Session,
@@ -580,12 +580,12 @@ def get_recommendation(
     if today is None:
         today = Date.today()
 
-    # ── Fetch user goal ──────────────────────────────────────────
+    # â”€â”€ Fetch user goal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     goal: UserGoal | None = session.exec(
         select(UserGoal).where(UserGoal.user_id == user.id)
     ).first()
 
-    # ── Fetch today's meals ─────────────────────────────────────
+    # â”€â”€ Fetch today's meals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     today_meals: list[Meal] = session.exec(
         select(Meal).where(
             Meal.user_id == user.id,
@@ -597,7 +597,7 @@ def get_recommendation(
     total_cal = sum(m.calories for m in today_meals)
     total_protein = sum(m.protein for m in today_meals)
 
-    # ── Fetch today's exercises ──────────────────────────────────
+    # â”€â”€ Fetch today's exercises â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     today_exercises: list[Exercise] = session.exec(
         select(Exercise).where(
             Exercise.user_id == user.id,
@@ -606,14 +606,12 @@ def get_recommendation(
         )
     ).all()
 
-    # ── Target calculation ──────────────────────────────────────
+    # â”€â”€ Target calculation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     cal_target, protein_target = _calculate_targets(user, goal)
     cal_remaining = max(0.0, cal_target - total_cal)
     protein_remaining = max(0.0, protein_target - total_protein)
 
-    # ── Training adequacy evaluation ─────────────────────────────
-    # This replaces the old "_session_counts_for_goal" check that
-    # treated ANY single exercise as completing the workout.
+    # â”€â”€ Training adequacy evaluation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     from src.services.training_service import evaluate_training_adequacy
 
     adequacy = evaluate_training_adequacy(
@@ -623,8 +621,7 @@ def get_recommendation(
         today=today,
     )
 
-    # Derive exercise completion from training adequacy instead of
-    # the old "one exercise = done" logic.
+    # Derive exercise completion from training adequacy
     exercise_done = adequacy.session_action in ("workout_adequate", "rest")
 
     # Nutrition completion: within 90% calories and 85% protein, or < 150 kcal remaining
@@ -632,7 +629,7 @@ def get_recommendation(
     protein_done = total_protein >= protein_target * 0.85
     nutrition_done = cal_done and protein_done
 
-    # ── Explicit type request handling ─────────────────────────
+    # â”€â”€ Explicit type request handling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if rec_type == "exercise":
         if exercise_done:
             if adequacy.session_action == "rest":
@@ -642,11 +639,10 @@ def get_recommendation(
                 )
             else:
                 ex_names = ", ".join(e.name for e in today_exercises) if today_exercises else ""
-                # Include adequacy detail for context
                 reason = (
                     f"You have completed enough work for this session ({ex_names}). "
                     f"{adequacy.detail} "
-                    "Great work – make sure to rest and recover!"
+                    "Great work â€“ make sure to rest and recover!"
                 )
             return RecommendationResponse(
                 has_recommendation=False,
@@ -673,7 +669,7 @@ def get_recommendation(
             session, user, goal, today_meals, cal_remaining, protein_remaining
         )
 
-    # ── General recommendation (rec_type is None) ───────────────
+    # â”€â”€ General recommendation (rec_type is None) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     sessions_today = len(today_exercises)
 
     # Case 1: Both nutrition and exercise are complete
@@ -683,7 +679,7 @@ def get_recommendation(
             type="none",
             reason=(
                 "You've hit your nutrition targets and completed your workout for today. "
-                "Great job – you're all set!"
+                "Great job â€“ you're all set!"
             ),
         )
 
@@ -729,7 +725,7 @@ def get_recommendation(
     return RecommendationResponse(
         has_recommendation=False,
         type="none",
-        reason="You're on track for today – both your nutrition and workout look good!",
+        reason="You're on track for today â€“ both your nutrition and workout look good!",
     )
 
 
@@ -747,8 +743,10 @@ def _recommend_exercise_with_adequacy(
     undertrained muscle groups, respecting the current session's
     split context.
 
-    Falls back to the original _recommend_exercise() logic if no
-    muscle-group-aware recommendation can be made.
+    Handles three distinct scenarios:
+    1. No appropriate exercise available â†’ explain clearly, NOT "workout complete"
+    2. Session adequate â†’ no more recommendations needed
+    3. Session not adequate â†’ recommend next exercise with reasoning
     """
     goal_type = (goal.goal_type if goal else None) or "improve_fitness"
     experience = (goal.training_experience or "beginner").lower() if goal else "beginner"
@@ -762,6 +760,7 @@ def _recommend_exercise_with_adequacy(
     ).all()
 
     if not catalog:
+        # No exercises available â€” NOT the same as "workout complete"
         return RecommendationResponse(
             has_recommendation=False,
             type="none",
@@ -777,11 +776,15 @@ def _recommend_exercise_with_adequacy(
     ]
 
     if not eligible:
+        # No suitable exercise available â€” different from "workout complete"
         if done_names:
             return RecommendationResponse(
                 has_recommendation=False,
                 type="none",
-                reason="You've already covered all available compatible exercises for today. Great work!",
+                reason=(
+                    "No additional compatible exercises available in the catalog. "
+                    "You may have covered all available options for today."
+                ),
                 items=[],
             )
         return RecommendationResponse(
@@ -795,6 +798,7 @@ def _recommend_exercise_with_adequacy(
     from src.services.training_service import (
         get_muscle_mappings,
         _get_relevant_muscles_for_split,
+        CARDIO_PRIMARY_GOALS,
     )
 
     mappings_by_catalog_id = get_muscle_mappings(session)
@@ -820,6 +824,7 @@ def _recommend_exercise_with_adequacy(
         mappings = mappings_by_catalog_id.get(item.id, [])
         primary_muscles = {m.muscle_group for m in mappings if m.role == "primary"}
         secondary_muscles = {m.muscle_group for m in mappings if m.role == "secondary"}
+        has_mappings = len(mappings) > 0
 
         # Primary match is worth more than secondary
         primary_overlap = primary_muscles & needed_muscle_set
@@ -831,6 +836,15 @@ def _recommend_exercise_with_adequacy(
         # Prefer exercises matching goal categories
         preferred_categories = GOAL_EXERCISE_CATEGORY.get(goal_type, ["cardio", "strength"])
         cat_bonus = 0 if item.category in preferred_categories else 50
+
+        # For cardio goals, strongly prefer cardio exercises
+        if goal_type in CARDIO_PRIMARY_GOALS and item.category == "cardio":
+            cat_bonus = -40
+
+        # Penalise exercises with no muscle mappings slightly â€”
+        # we can't guarantee they target what's needed
+        if not has_mappings and item.category == "strength":
+            muscle_score += 20
 
         # Experience-based preference
         exp_bonus = 0
@@ -879,10 +893,10 @@ def _recommend_exercise_with_adequacy(
 
     detail_parts = []
     if sets and reps:
-        detail_parts.append(f"{sets} sets × {reps} reps")
+        detail_parts.append(f"{sets} sets Ã— {reps} reps")
     if duration:
         detail_parts.append(f"{duration} minutes")
-    detail_str = " · ".join(detail_parts)
+    detail_str = " Â· ".join(detail_parts)
 
     # Build a context-aware reason using adequacy information
     reason = f"Based on your '{goal_type.replace('_', ' ')}' goal and {experience} experience"
@@ -906,7 +920,7 @@ def _recommend_exercise_with_adequacy(
             if pick_primary:
                 reason += f", but {', '.join(pick_primary)} still needs attention"
     else:
-        reason += " — you haven't exercised yet today"
+        reason += " â€” you haven't exercised yet today"
 
     if detail_str:
         reason += f". Suggested: {detail_str}."
@@ -918,4 +932,5 @@ def _recommend_exercise_with_adequacy(
         reason=reason,
         items=[item],
     )
+
 

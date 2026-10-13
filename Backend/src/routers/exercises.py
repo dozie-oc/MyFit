@@ -205,12 +205,26 @@ def create_exercise(
             if not exercise_data.category or exercise_data.category == "other":
                 exercise_data.category = cat_item.category
     else:
-        # Check keyword matches
-        name_lower = exercise_data.name.lower()
-        for kw, kw_met in KEYWORD_MET.items():
-            if kw in name_lower:
-                met = kw_met
-                break
+        # Auto-lookup catalog item by name for muscle-group mapping
+        cat_item = session.exec(
+            select(ExerciseCatalogItem).where(
+                ExerciseCatalogItem.name == exercise_data.name,
+                ExerciseCatalogItem.deleted_at.is_(None),
+            )
+        ).first()
+        if cat_item:
+            exercise_data.exercise_catalog_id = cat_item.id
+            met = cat_item.default_met
+            if not exercise_data.category or exercise_data.category == "other":
+                exercise_data.category = cat_item.category
+        else:
+            # Check keyword matches for MET
+            name_lower = exercise_data.name.lower()
+            for kw, kw_met in KEYWORD_MET.items():
+                if kw in name_lower:
+                    met = kw_met
+                    break
+
 
     # 2. Compute calories burned
     user_weight = current_user.weight or 70.0
