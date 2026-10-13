@@ -147,12 +147,16 @@ CARDIO_TARGET_DURATION: dict[str, int] = {
     "advanced": 45,
 }
 
-# Intensity multiplier for cardio effort.
-CARDIO_INTENSITY_MULTIPLIERS: dict[str, float] = {
-    "low": 0.7,
+# Canonical intensity multiplier. Shared by calorie estimation
+# (routers/exercises.py) and cardio adequacy so both stay consistent.
+INTENSITY_MULTIPLIERS: dict[str, float] = {
+    "low": 0.8,
     "moderate": 1.0,
-    "high": 1.3,
+    "high": 1.25,
 }
+
+# Backwards-compatible alias.
+CARDIO_INTENSITY_MULTIPLIERS = INTENSITY_MULTIPLIERS
 
 # Goals that should be evaluated primarily/partially via cardio.
 CARDIO_PRIMARY_GOALS = {"improve_endurance"}
@@ -170,13 +174,6 @@ MAX_SETS_PER_SESSION: dict[str, int] = {
     "intermediate": 22,
     "advanced": 30,
 }
-
-# Movement pattern groupings for split-awareness.
-PUSH_PATTERNS = {"horizontal_push", "vertical_push"}
-PULL_PATTERNS = {"horizontal_pull", "vertical_pull"}
-LEG_PATTERNS = {"squat", "hinge", "lunge"}
-UPPER_PATTERNS = PUSH_PATTERNS | PULL_PATTERNS | {"isolation"}
-LOWER_PATTERNS = LEG_PATTERNS | {"carry"}
 
 # Muscle groups that are "major" for each split category
 UPPER_MUSCLE_GROUPS = {"chest", "back", "shoulders", "biceps", "triceps"}

@@ -9,6 +9,7 @@ from src.auth.auth import (
     create_access_token,
     hash_password,
 )
+from src.auth.users import calculate_age
 from src.dependencies import CurrentUserDep, SessionDep
 from src.models import User, WeightLog
 from src.schemas import (
@@ -253,35 +254,4 @@ def update_measurements(
         height=current_user.height,
         birthdate=current_user.birthdate,
         age=calculate_age(current_user.birthdate) if current_user.birthdate else None,
-    )
-
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-
-def calculate_age(
-    birthdate: date,
-) -> int:
-    """
-    Calculate a user's current age from their birthdate.
-
-    Age is calculated dynamically rather than stored in the
-    database because it changes automatically over time.
-    """
-
-    today = date.today()
-
-    age = today.year - birthdate.year
-
-    if (
-        today.month,
-        today.day,
-    ) < (
-        birthdate.month,
-        birthdate.day,
-    ):
-        age -= 1
-
-    return age
+    )

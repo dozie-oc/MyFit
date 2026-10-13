@@ -51,8 +51,9 @@ def upsert_goal(
         goal = UserGoal(user_id=current_user.id)
         session.add(goal)
 
-    # Apply only the fields that were supplied (non-None in the payload).
-    update_data = data.model_dump(exclude_unset=False)
+    # Apply only the fields the client explicitly supplied. Omitted fields
+    # are left untouched; an explicit null clears the field.
+    update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(goal, field, value)
 

@@ -13,6 +13,7 @@ from src.schemas import (
     MuscleGroupStatus,
 )
 from src.routers.daily_summary import calculate_daily_summary
+from src.services.training_service import INTENSITY_MULTIPLIERS
 
 
 router = APIRouter(
@@ -51,11 +52,6 @@ KEYWORD_MET = {
     "pull-up": 4.5,
 }
 
-INTENSITY_MULTIPLIER = {
-    "low": 0.8,
-    "moderate": 1.0,
-    "high": 1.25,
-}
 
 
 def calculate_calories(
@@ -73,7 +69,7 @@ def calculate_calories(
     if user_weight_kg <= 0:
         user_weight_kg = 70.0  # Safe fallback weight
 
-    mult = INTENSITY_MULTIPLIER.get((intensity or "").lower(), 1.0)
+    mult = INTENSITY_MULTIPLIERS.get((intensity or "").lower(), 1.0)
     effective_met = met * mult
 
     if duration_minutes is not None and duration_minutes > 0:

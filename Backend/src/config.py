@@ -185,7 +185,7 @@ def get_settings() -> Settings:
 #
 # Other modules should use:
 #
-#     from backend.config import settings
+#     from src.config import settings
 #
 # instead of accessing environment variables directly.
 settings = get_settings()

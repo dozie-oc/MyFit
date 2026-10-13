@@ -7,11 +7,8 @@ build/
 dist/
 wheels/
 *.egg-info
-seed.py
-test_query.py
 /myfit.db
 *.env
-/tests
 
 # Virtual environments
 .venv
