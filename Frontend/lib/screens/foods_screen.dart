@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../models/models.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
 import '../main.dart' show TabActivatedNotifier;
@@ -64,19 +65,19 @@ class _LocalFoodsTab extends StatefulWidget {
 
 class _LocalFoodsTabState extends State<_LocalFoodsTab> {
   final _searchCtrl = TextEditingController();
-  late Future<List<dynamic>> _future;
+  late Future<List<FoodItem>> _future;
 
   @override
   void initState() {
     super.initState();
     _future = ApiClient.getFoods();
-    ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+    ApiClient.addDataListener(_onDataChanged, {DataScope.foods});
     widget.tabNotifier?.addListener(_onTabActivated);
   }
 
   @override
   void dispose() {
-    ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    ApiClient.removeDataListener(_onDataChanged);
     widget.tabNotifier?.removeListener(_onTabActivated);
     _searchCtrl.dispose();
     super.dispose();
@@ -139,7 +140,7 @@ class _LocalFoodsTabState extends State<_LocalFoodsTab> {
           ),
         ),
         Expanded(
-          child: FutureBuilder<List<dynamic>>(
+          child: FutureBuilder<List<FoodItem>>(
             future: _future,
             builder: (context, snap) {
               if (snap.connectionState == ConnectionState.waiting) {
@@ -182,16 +183,16 @@ class _LocalFoodsTabState extends State<_LocalFoodsTab> {
 }
 
 class _FoodListTile extends StatelessWidget {
-  final Map<String, dynamic> food;
+  final FoodItem food;
   const _FoodListTile({required this.food});
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      title: Text(food['name'] as String? ?? '',
+      title: Text(food.name,
           style: const TextStyle(fontSize: 14)),
       subtitle: Text(
-          '${(food['calories_per_100g'] as num?)?.toStringAsFixed(0) ?? '0'} kcal / 100g',
+          '${food.caloriesPer100g.toStringAsFixed(0)} kcal / 100g',
           style: const TextStyle(fontSize: 12)),
       trailing: const Icon(Icons.chevron_right, size: 18),
       onTap: () => _showFoodDetail(context, food),
@@ -199,7 +200,7 @@ class _FoodListTile extends StatelessWidget {
   }
 
   void _showFoodDetail(
-      BuildContext context, Map<String, dynamic> food) {
+      BuildContext context, FoodItem food) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -212,12 +213,12 @@ class _FoodListTile extends StatelessWidget {
 }
 
 class _FoodDetailSheet extends StatelessWidget {
-  final Map<String, dynamic> food;
+  final FoodItem food;
   const _FoodDetailSheet({required this.food});
 
   @override
   Widget build(BuildContext context) {
-    final portions = (food['portions'] as List?) ?? [];
+    final portions = food.portions;
     return DraggableScrollableSheet(
       expand: false,
       initialChildSize: 0.55,
@@ -235,12 +236,12 @@ class _FoodDetailSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          Text(food['name'] as String? ?? '',
+          Text(food.name,
               style: const TextStyle(
                   fontSize: 17, fontWeight: FontWeight.w600)),
-          if (food['usda_data_type'] != null) ...[
+          if (food.usdaDataType != null) ...[
             const SizedBox(height: 4),
-            Text(food['usda_data_type'] as String,
+            Text(food.usdaDataType!,
                 style: const TextStyle(
                     fontSize: 12, color: Color(0xFF9CA3AF))),
           ],
@@ -252,10 +253,10 @@ class _FoodDetailSheet extends StatelessWidget {
                   fontWeight: FontWeight.w500)),
           const SizedBox(height: 8),
           NutrientRow(
-            calories: (food['calories_per_100g'] as num?)?.toDouble() ?? 0,
-            protein: (food['protein_per_100g'] as num?)?.toDouble() ?? 0,
-            carbs: (food['carbs_per_100g'] as num?)?.toDouble() ?? 0,
-            fat: (food['fat_per_100g'] as num?)?.toDouble() ?? 0,
+            calories: food.caloriesPer100g,
+            protein: food.proteinPer100g,
+            carbs: food.carbsPer100g,
+            fat: food.fatPer100g,
           ),
           if (portions.isNotEmpty) ...[
             const SizedBox(height: 20),
@@ -268,9 +269,9 @@ class _FoodDetailSheet extends StatelessWidget {
             ...portions.map((p) => Padding(
                   padding: const EdgeInsets.symmetric(vertical: 3),
                   child: InfoTile(
-                    label: p['name'] as String? ?? '',
+                    label: p.name,
                     value:
-                        '${(p['gram_weight'] as num?)?.toStringAsFixed(0) ?? '?'}g',
+                        '${p.gramWeight > 0 ? p.gramWeight.toStringAsFixed(0) : '?'}g',
                   ),
                 )),
           ],

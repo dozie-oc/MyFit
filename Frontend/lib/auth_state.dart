@@ -1,9 +1,10 @@
 import 'package:flutter/foundation.dart';
+import 'models/models.dart';
 import 'services/api_client.dart';
 
 class AuthState extends ChangeNotifier {
   String? _token;
-  Map<String, dynamic>? _user;
+  UserProfile? _user;
   bool _loading = false;
   String? _error;
 
@@ -11,7 +12,7 @@ class AuthState extends ChangeNotifier {
   bool _checkingGoal = false;
 
   bool get isLoggedIn => _token != null;
-  Map<String, dynamic>? get user => _user;
+  UserProfile? get user => _user;
   bool get loading => _loading;
   String? get error => _error;
   bool get hasGoal => _hasGoal;
@@ -21,8 +22,7 @@ class AuthState extends ChangeNotifier {
     _checkingGoal = true;
     try {
       final goal = await ApiClient.getGoal();
-      _hasGoal = goal['id'] != null ||
-          (goal['goal_type'] != null && goal['goal_type'].toString().isNotEmpty);
+      _hasGoal = goal.hasGoal;
     } catch (_) {
       _hasGoal = true;
     } finally {

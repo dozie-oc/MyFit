@@ -21,60 +21,96 @@ router = APIRouter(
 )
 
 
-def build_meal_response(
+def build_meal_responses(
     session: Session,
-    meal: Meal
-) -> MealOut:
+    meals: list[Meal],
+) -> list[MealOut]:
     """
-    Build the API response for a meal including its items and food names.
+    Build API responses for many meals using three queries in total
+    (items, foods, portions) instead of several per meal.
 
     MealItem stores nutritional snapshots, and we resolve human-readable
     food and portion names for the client display.
     """
 
-    items = session.exec(
+    if not meals:
+        return []
+
+    from src.models import FoodPortion
+
+    meal_ids = [m.id for m in meals]
+
+    all_items = session.exec(
         select(MealItem).where(
-            MealItem.meal_id == meal.id,
+            MealItem.meal_id.in_(meal_ids),
             MealItem.deleted_at.is_(None)
         )
     ).all()
 
-    food_ids = {item.food_id for item in items}
-    portion_ids = {item.portion_id for item in items if item.portion_id is not None}
+    items_by_meal: dict[int, list[MealItem]] = {}
+    for item in all_items:
+        items_by_meal.setdefault(item.meal_id, []).append(item)
+
+    food_ids = {item.food_id for item in all_items}
+    portion_ids = {
+        item.portion_id for item in all_items if item.portion_id is not None
+    }
 
     foods: dict[int, str] = {}
     if food_ids:
-        foods_list = session.exec(
-            select(FoodItem).where(FoodItem.id.in_(food_ids))
-        ).all()
-        foods = {f.id: f.name for f in foods_list}
+        foods = {
+            f.id: f.name
+            for f in session.exec(
+                select(FoodItem).where(FoodItem.id.in_(food_ids))
+            ).all()
+        }
 
     portions: dict[int, str] = {}
     if portion_ids:
-        from src.models import FoodPortion
-        portions_list = session.exec(
-            select(FoodPortion).where(FoodPortion.id.in_(portion_ids))
-        ).all()
-        portions = {p.id: p.name for p in portions_list}
+        portions = {
+            p.id: p.name
+            for p in session.exec(
+                select(FoodPortion).where(FoodPortion.id.in_(portion_ids))
+            ).all()
+        }
 
-    out_items: list[MealItemOut] = []
-    for item in items:
-        item_dict = item.model_dump()
-        item_dict["food_name"] = foods.get(item.food_id, f"Food #{item.food_id}")
-        item_dict["portion_name"] = portions.get(item.portion_id) if item.portion_id else None
-        out_items.append(MealItemOut.model_validate(item_dict))
+    responses: list[MealOut] = []
+    for meal in meals:
+        out_items: list[MealItemOut] = []
+        for item in items_by_meal.get(meal.id, []):
+            item_dict = item.model_dump()
+            item_dict["food_name"] = foods.get(
+                item.food_id, f"Food #{item.food_id}"
+            )
+            item_dict["portion_name"] = (
+                portions.get(item.portion_id) if item.portion_id else None
+            )
+            out_items.append(MealItemOut.model_validate(item_dict))
 
-    return MealOut(
-        id=meal.id,
-        date=meal.date,
-        meal_type=getattr(meal, "meal_type", "snack") or "snack",
-        calories=meal.calories,
-        protein=meal.protein,
-        carbs=meal.carbs,
-        fat=meal.fat,
-        created_at=meal.created_at,
-        items=out_items
-    )
+        responses.append(
+            MealOut(
+                id=meal.id,
+                date=meal.date,
+                meal_type=getattr(meal, "meal_type", "snack") or "snack",
+                calories=meal.calories,
+                protein=meal.protein,
+                carbs=meal.carbs,
+                fat=meal.fat,
+                created_at=meal.created_at,
+                items=out_items,
+            )
+        )
+
+    return responses
+
+
+def build_meal_response(
+    session: Session,
+    meal: Meal
+) -> MealOut:
+    """Build the API response for a single meal."""
+
+    return build_meal_responses(session, [meal])[0]
 
 
 @router.post(
@@ -272,13 +308,7 @@ def get_meals(
 
     meals = session.exec(statement).all()
 
-    return [
-        build_meal_response(
-            session,
-            meal
-        )
-        for meal in meals
-    ]
+    return build_meal_responses(session, meals)
 
 
 @router.get(

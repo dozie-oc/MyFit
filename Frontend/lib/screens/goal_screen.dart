@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../models/models.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
 
@@ -12,7 +13,15 @@ class GoalScreen extends StatefulWidget {
   /// the back arrow (used during onboarding after registration).
   final bool isOnboarding;
   final VoidCallback? onSaved;
-  const GoalScreen({super.key, this.isOnboarding = false, this.onSaved});
+  final UserGoal? initialGoal;
+  final UserProfile? initialUser;
+  const GoalScreen({
+    super.key,
+    this.isOnboarding = false,
+    this.onSaved,
+    this.initialGoal,
+    this.initialUser,
+  });
 
   @override
   State<GoalScreen> createState() => _GoalScreenState();
@@ -84,7 +93,12 @@ class _GoalScreenState extends State<GoalScreen> {
   @override
   void initState() {
     super.initState();
-    _loadGoal();
+    if (widget.initialGoal != null || widget.initialUser != null) {
+      _applyData(widget.initialGoal ?? const UserGoal.empty(), widget.initialUser);
+      _loading = false;
+    } else {
+      _loadGoal();
+    }
   }
 
   @override
@@ -96,42 +110,45 @@ class _GoalScreenState extends State<GoalScreen> {
     super.dispose();
   }
 
+  void _applyData(UserGoal goal, UserProfile? user) {
+    if (user != null) {
+      if (user.weight != null) _weightCtrl.text = user.weight.toString();
+      if (user.height != null) _heightCtrl.text = user.height.toString();
+      final b = user.birthdate;
+      if (b != null && b.isNotEmpty) {
+        _birthdate = DateTime.tryParse(b);
+      }
+    }
+
+    _goalType = goal.goalType;
+    if (goal.targetWeight != null) {
+      _targetWeightCtrl.text = goal.targetWeight.toString();
+    }
+    _activityLevel = goal.activityLevel;
+    _trainingDays = goal.trainingDaysPerWeek;
+    _experience = goal.trainingExperience;
+    if (goal.availableEquipment != null &&
+        goal.availableEquipment!.isNotEmpty) {
+      _equipment
+        ..clear()
+        ..addAll(goal.equipmentList);
+    }
+    _dietaryPref = goal.dietaryPreference;
+    final avoid = goal.foodsToAvoid;
+    if (avoid != null) _avoidCtrl.text = avoid;
+  }
+
   Future<void> _loadGoal() async {
     try {
       final goal = await ApiClient.getGoal();
-      Map<String, dynamic>? user;
+      UserProfile? user;
       try {
         user = await ApiClient.me();
       } catch (_) {}
 
       if (mounted) {
         setState(() {
-          if (user != null) {
-            final w = user['weight'];
-            if (w != null) _weightCtrl.text = w.toString();
-            final h = user['height'];
-            if (h != null) _heightCtrl.text = h.toString();
-            final b = user['birthdate'] as String?;
-            if (b != null && b.isNotEmpty) {
-              _birthdate = DateTime.tryParse(b);
-            }
-          }
-
-          _goalType = goal['goal_type'] as String?;
-          final tw = goal['target_weight'];
-          if (tw != null) _targetWeightCtrl.text = tw.toString();
-          _activityLevel = goal['activity_level'] as String?;
-          _trainingDays = goal['training_days_per_week'] as int?;
-          _experience = goal['training_experience'] as String?;
-          final eq = goal['available_equipment'] as String?;
-          if (eq != null && eq.isNotEmpty) {
-            _equipment
-              ..clear()
-              ..addAll(eq.split(',').map((e) => e.trim()));
-          }
-          _dietaryPref = goal['dietary_preference'] as String?;
-          final avoid = goal['foods_to_avoid'] as String?;
-          if (avoid != null) _avoidCtrl.text = avoid;
+          _applyData(goal, user);
           _loading = false;
         });
       }
@@ -201,19 +218,19 @@ class _GoalScreenState extends State<GoalScreen> {
       final twText = _targetWeightCtrl.text.trim();
       final tw = twText.isNotEmpty ? double.tryParse(twText) : null;
       final eqStr = _equipment.isNotEmpty ? _equipment.join(',') : null;
-      final body = <String, dynamic>{
-        'goal_type': _goalType,
-        'target_weight': tw,
-        'activity_level': _activityLevel,
-        'training_days_per_week': _trainingDays,
-        'training_experience': _experience,
-        'available_equipment': eqStr,
-        'dietary_preference': _dietaryPref,
-        'foods_to_avoid': _avoidCtrl.text.trim().isEmpty
+      final newGoal = UserGoal(
+        goalType: _goalType,
+        targetWeight: tw,
+        activityLevel: _activityLevel,
+        trainingDaysPerWeek: _trainingDays,
+        trainingExperience: _experience,
+        availableEquipment: eqStr,
+        dietaryPreference: _dietaryPref,
+        foodsToAvoid: _avoidCtrl.text.trim().isEmpty
             ? null
             : _avoidCtrl.text.trim(),
-      };
-      await ApiClient.upsertGoal(body);
+      );
+      await ApiClient.upsertGoal(newGoal);
       if (mounted) {
         widget.onSaved?.call();
         if (Navigator.of(context).canPop()) {

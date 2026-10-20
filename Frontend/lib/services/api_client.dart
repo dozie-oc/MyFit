@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
+import '../models/models.dart';
 
 // ─────────────────────────────────────────
 // CONFIG
@@ -30,16 +32,41 @@ class ApiException implements Exception {
 // HTTP CLIENT HELPER & EVENT BUS
 // ─────────────────────────────────────────
 
+/// Categories of data a mutation can change. Screens subscribe only to
+/// the scopes they actually display so unrelated tabs (all kept alive by
+/// the IndexedStack) do not refetch on every change.
+enum DataScope { meals, exercises, habits, foods, profile, goal }
+
 class ApiClient {
   static const _tokenKey = 'auth_token';
 
-  /// Global notifier to trigger soft reloads across all active screens
-  /// whenever any entity (meal, exercise, habit, food, measurement) is created,
-  /// updated, or deleted.
-  static final ValueNotifier<int> dataChangeNotifier = ValueNotifier<int>(0);
+  // ── Scoped, debounced change notifications ──────────────────────
 
-  static void notifyDataChanged() {
-    dataChangeNotifier.value++;
+  static final Map<VoidCallback, Set<DataScope>> _dataListeners = {};
+  static final Set<DataScope> _pendingScopes = {};
+  static Timer? _debounce;
+
+  /// Subscribe [listener] to changes in any of [scopes].
+  static void addDataListener(VoidCallback listener, Set<DataScope> scopes) {
+    _dataListeners[listener] = scopes;
+  }
+
+  static void removeDataListener(VoidCallback listener) {
+    _dataListeners.remove(listener);
+  }
+
+  /// Announce that data in [scopes] changed. Rapid successive calls are
+  /// coalesced into a single notification per interested listener.
+  static void notifyDataChanged(Set<DataScope> scopes) {
+    _pendingScopes.addAll(scopes);
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 150), () {
+      final changed = Set<DataScope>.of(_pendingScopes);
+      _pendingScopes.clear();
+      for (final entry in List.of(_dataListeners.entries)) {
+        if (entry.value.any(changed.contains)) entry.key();
+      }
+    });
   }
 
   // ── Token storage ──────────────────────
@@ -171,8 +198,9 @@ class ApiClient {
     return token;
   }
 
-  static Future<Map<String, dynamic>> me() async {
-    return await get('/auth/me');
+  static Future<UserProfile> me() async {
+    final res = await get('/auth/me');
+    return UserProfile.fromJson(res as Map<String, dynamic>);
   }
 
   static Future<Map<String, dynamic>> updateMeasurements({
@@ -186,7 +214,7 @@ class ApiClient {
       if (birthdate != null) 'birthdate': birthdate,
     };
     final data = await patch('/auth/measurements', body);
-    notifyDataChanged();
+    notifyDataChanged({DataScope.profile, DataScope.goal});
     return data;
   }
 
@@ -194,14 +222,21 @@ class ApiClient {
   // FOODS
   // ─────────────────────────────────────
 
-  static Future<List<dynamic>> getFoods([String? query]) async {
+  static Future<List<FoodItem>> getFoods([String? query]) async {
     final params = <String, String>{};
     if (query != null && query.isNotEmpty) params['q'] = query;
-    return await get('/foods${query != null ? '/search' : ''}', params);
+    final res = await get('/foods${query != null ? '/search' : ''}', params);
+    if (res is List) {
+      return res
+          .map((e) => FoodItem.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    return const [];
   }
 
-  static Future<Map<String, dynamic>> getFood(int id) async {
-    return await get('/foods/$id');
+  static Future<FoodItem> getFood(int id) async {
+    final res = await get('/foods/$id');
+    return FoodItem.fromJson(res as Map<String, dynamic>);
   }
 
   static Future<List<dynamic>> searchUsda(String query) async {
@@ -215,7 +250,7 @@ class ApiClient {
 
   static Future<Map<String, dynamic>> importUsda(int fdcId) async {
     final res = await post('/foods/usda/$fdcId/import', {});
-    notifyDataChanged();
+    notifyDataChanged({DataScope.foods});
     return res;
   }
 
@@ -223,29 +258,33 @@ class ApiClient {
   // MEALS
   // ─────────────────────────────────────
 
-  static Future<List<dynamic>> getMeals([String? date]) async {
+  static Future<List<Meal>> getMeals([String? date]) async {
     final params = <String, String>{};
     if (date != null) params['meal_date'] = date;
-    return await get('/meals', params);
+    final res = await get('/meals', params);
+    if (res is List) {
+      return res.map((e) => Meal.fromJson(e as Map<String, dynamic>)).toList();
+    }
+    return const [];
   }
 
   static Future<Map<String, dynamic>> createMeal(
       Map<String, dynamic> body) async {
     final res = await post('/meals', body);
-    notifyDataChanged();
+    notifyDataChanged({DataScope.meals});
     return res;
   }
 
   static Future<void> deleteMeal(int id) async {
     await delete('/meals/$id');
-    notifyDataChanged();
+    notifyDataChanged({DataScope.meals});
   }
 
   static Future<Map<String, dynamic>> overrideMealCalories(
       int id, double calories) async {
     final res = await patch(
         '/meals/$id/calories', {'override_calories': calories});
-    notifyDataChanged();
+    notifyDataChanged({DataScope.meals});
     return res;
   }
 
@@ -261,22 +300,28 @@ class ApiClient {
     return await get('/exercises/catalog', params);
   }
 
-  static Future<List<dynamic>> getExercises([String? date]) async {
+  static Future<List<Exercise>> getExercises([String? date]) async {
     final params = <String, String>{};
     if (date != null) params['exercise_date'] = date;
-    return await get('/exercises', params);
+    final res = await get('/exercises', params);
+    if (res is List) {
+      return res
+          .map((e) => Exercise.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    return const [];
   }
 
   static Future<Map<String, dynamic>> createExercise(
       Map<String, dynamic> body) async {
     final res = await post('/exercises', body);
-    notifyDataChanged();
+    notifyDataChanged({DataScope.exercises});
     return res;
   }
 
   static Future<void> deleteExercise(int id) async {
     await delete('/exercises/$id');
-    notifyDataChanged();
+    notifyDataChanged({DataScope.exercises});
   }
 
   // ─────────────────────────────────────
@@ -290,7 +335,7 @@ class ApiClient {
   static Future<Map<String, dynamic>> logWeight(
       String date, double weight) async {
     final res = await post('/weight', {'date': date, 'weight': weight});
-    notifyDataChanged();
+    notifyDataChanged({DataScope.profile});
     return res;
   }
 
@@ -298,10 +343,14 @@ class ApiClient {
   // HABITS
   // ─────────────────────────────────────────
 
-  /// Returns all habits with embedded logs (last 35 days).
-  /// This is the primary endpoint — avoids N+1 log fetches.
-  static Future<List<dynamic>> getHabits([int days = 35]) async {
-    return await get('/habits', {'days': days.toString()});
+  static Future<List<Habit>> getHabits([int days = 35]) async {
+    final res = await get('/habits', {'days': days.toString()});
+    if (res is List) {
+      return res
+          .map((e) => Habit.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    return const [];
   }
 
   static Future<Map<String, dynamic>> createHabit(
@@ -316,7 +365,7 @@ class ApiClient {
       if (color != null) 'color': color,
       'target_per_week': targetPerWeek,
     });
-    notifyDataChanged();
+    notifyDataChanged({DataScope.habits});
     return res;
   }
 
@@ -334,64 +383,80 @@ class ApiClient {
       if (targetPerWeek != null) 'target_per_week': targetPerWeek,
     };
     final res = await patch('/habits/$id', body);
-    notifyDataChanged();
+    notifyDataChanged({DataScope.habits});
     return res;
   }
 
   static Future<void> deleteHabit(int id) async {
     await delete('/habits/$id');
-    notifyDataChanged();
+    notifyDataChanged({DataScope.habits});
   }
 
   static Future<Map<String, dynamic>> logHabit(
       int habitId, String date, bool completed) async {
     final res = await post('/habits/$habitId/logs',
         {'date': date, 'completed': completed});
-    notifyDataChanged();
+    notifyDataChanged({DataScope.habits});
     return res;
   }
 
   static Future<void> deleteHabitLog(int habitId, String date) async {
     await delete('/habits/$habitId/logs/$date');
-    notifyDataChanged();
+    notifyDataChanged({DataScope.habits});
   }
 
   /// Returns per-day habit activity for activity ring rendering.
-  static Future<List<dynamic>> getHabitActivity({
+  static Future<List<HabitActivityDay>> getHabitActivity({
     String? dateFrom,
     String? dateTo,
   }) async {
     final params = <String, String>{};
     if (dateFrom != null) params['date_from'] = dateFrom;
     if (dateTo != null) params['date_to'] = dateTo;
-    return await get('/habits/activity', params);
+    final res = await get('/habits/activity', params);
+    if (res is List) {
+      return res
+          .map((e) => HabitActivityDay.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    return const [];
   }
 
   // ─────────────────────────────────────
   // SUMMARY
   // ─────────────────────────────────────
 
-  static Future<List<dynamic>> getAllSummaries() async {
-    return await get('/summary');
+  static Future<List<DailySummary>> getAllSummaries() async {
+    final res = await get('/summary');
+    if (res is List) {
+      return res
+          .map((e) => DailySummary.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    return const [];
   }
 
-  static Future<Map<String, dynamic>> getSummary(String date) async {
-    return await get('/summary/$date');
+  static Future<DailySummary> getSummary(String date) async {
+    final res = await get('/summary/$date');
+    return DailySummary.fromJson(res as Map<String, dynamic>);
   }
 
   // ─────────────────────────────────────────
   // GOALS
   // ─────────────────────────────────────────
 
-  static Future<Map<String, dynamic>> getGoal() async {
-    return await get('/goals');
+  static Future<UserGoal> getGoal() async {
+    final res = await get('/goals');
+    return UserGoal.fromJson(res as Map<String, dynamic>);
   }
 
-  static Future<Map<String, dynamic>> upsertGoal(
-      Map<String, dynamic> body) async {
-    final res = await post('/goals', body);
-    notifyDataChanged();
-    return res;
+  static Future<UserGoal> upsertGoal(dynamic body) async {
+    final payload = body is UserGoal
+        ? body.toJson(excludeUnset: true)
+        : (body as Map<String, dynamic>);
+    final res = await post('/goals', payload);
+    notifyDataChanged({DataScope.goal});
+    return UserGoal.fromJson(res as Map<String, dynamic>);
   }
 
   // ─────────────────────────────────────────

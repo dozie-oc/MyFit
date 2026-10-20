@@ -1,5 +1,6 @@
 
 import 'package:flutter/material.dart';
+import '../models/models.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
 import 'habits_screen.dart' show HabitActivityRing;
@@ -11,7 +12,7 @@ import '../main.dart' show TabActivatedNotifier;
 // ─────────────────────────────────────────
 
 class DashboardScreen extends StatefulWidget {
-  final Map<String, dynamic> user;
+  final UserProfile user;
   final TabActivatedNotifier? tabNotifier;
   const DashboardScreen({super.key, required this.user, this.tabNotifier});
 
@@ -28,13 +29,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.initState();
     _selectedDate = _stripTime(DateTime.now());
     _future = _load();
-    ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+    ApiClient.addDataListener(_onDataChanged, {
+      DataScope.meals,
+      DataScope.exercises,
+      DataScope.habits,
+      DataScope.goal,
+    });
     widget.tabNotifier?.addListener(_onTabActivated);
   }
 
   @override
   void dispose() {
-    ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    ApiClient.removeDataListener(_onDataChanged);
     widget.tabNotifier?.removeListener(_onTabActivated);
     super.dispose();
   }
@@ -68,7 +74,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final rangeEnd = _selectedDate.add(const Duration(days: 14));
 
     final results = await Future.wait([
-      ApiClient.getSummary(dateStr).catchError((_) => <String, dynamic>{}),
+      ApiClient.getSummary(dateStr).catchError((_) => const DailySummary.empty()),
       ApiClient.getMeals(dateStr),
       ApiClient.getExercises(dateStr),
       ApiClient.getHabits(),
@@ -83,9 +89,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           : Future.value(<String, dynamic>{'has_recommendation': false, 'reason': ''}),
     ]);
 
-    Map<String, dynamic> summary = {};
-    if (results[0] is Map<String, dynamic>) {
-      summary = results[0] as Map<String, dynamic>;
+    DailySummary summary = const DailySummary.empty();
+    if (results[0] is DailySummary) {
+      summary = results[0] as DailySummary;
     }
 
     Map<String, dynamic> recommendation = {};
@@ -95,10 +101,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     return _DashboardData(
       summary: summary,
-      meals: results[1] as List<dynamic>,
-      exercises: results[2] as List<dynamic>,
-      habits: results[3] as List<dynamic>,
-      activity: results[4] as List<dynamic>,
+      meals: results[1] as List<Meal>,
+      exercises: results[2] as List<Exercise>,
+      habits: results[3] as List<Habit>,
+      activity: results[4] as List<HabitActivityDay>,
       recommendation: recommendation,
     );
   }
@@ -126,7 +132,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   String _greeting() {
     final h = DateTime.now().hour;
-    final name = (widget.user['username'] as String? ?? 'User');
+    final name = widget.user.username.isNotEmpty ? widget.user.username : 'User';
     if (h >= 5 && h < 12) return 'Good morning, $name';
     if (h >= 12 && h < 17) return 'Good afternoon, $name';
     if (h >= 17 && h < 21) return 'Good evening, $name';
@@ -241,12 +247,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Map<String, Map<String, dynamic>> _buildActivityMap(
-      List<dynamic> activity) {
-    final m = <String, Map<String, dynamic>>{};
+  Map<String, HabitActivityDay> _buildActivityMap(
+      List<HabitActivityDay> activity) {
+    final m = <String, HabitActivityDay>{};
     for (final a in activity) {
-      final d = a['date'] as String?;
-      if (d != null) m[d] = a as Map<String, dynamic>;
+      if (a.date.isNotEmpty) m[a.date] = a;
     }
     return m;
   }
@@ -288,11 +293,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 // ─────────────────────────────────────────
 
 class _DashboardData {
-  final Map<String, dynamic> summary;
-  final List<dynamic> meals;
-  final List<dynamic> exercises;
-  final List<dynamic> habits;
-  final List<dynamic> activity;
+  final DailySummary summary;
+  final List<Meal> meals;
+  final List<Exercise> exercises;
+  final List<Habit> habits;
+  final List<HabitActivityDay> activity;
   final Map<String, dynamic> recommendation;
   const _DashboardData({
     required this.summary,
@@ -310,8 +315,8 @@ class _DashboardData {
 
 class _CalendarStrip extends StatefulWidget {
   final DateTime selectedDate;
-  final List<dynamic> habits;
-  final Map<String, Map<String, dynamic>> activityByDate;
+  final List<Habit> habits;
+  final Map<String, HabitActivityDay> activityByDate;
   final void Function(DateTime) onSelectDate;
   final VoidCallback onExpand;
 
@@ -447,8 +452,8 @@ class _CalendarStripState extends State<_CalendarStrip> {
 class _StripCell extends StatelessWidget {
   final DateTime date;
   final bool isSelected;
-  final List<dynamic> habits;
-  final Map<String, dynamic>? activity;
+  final List<Habit> habits;
+  final HabitActivityDay? activity;
   final VoidCallback onTap;
 
   const _StripCell({
@@ -464,12 +469,8 @@ class _StripCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isToday = _fmtDate(date) == _fmtDate(DateTime.now());
-    final completed =
-        (activity?['completed_habit_ids'] as List?)?.cast<int>() ?? [];
-    final pending =
-        (activity?['pending_habit_ids'] as List?)?.cast<int>() ?? [];
-    final habitMaps =
-        habits.whereType<Map<String, dynamic>>().toList();
+    final completed = activity?.completedHabitIds ?? [];
+    final pending = activity?.pendingHabitIds ?? [];
 
     return GestureDetector(
       onTap: onTap,
@@ -525,7 +526,7 @@ class _StripCell extends StatelessWidget {
             const SizedBox(height: 4),
             // Activity ring
             HabitActivityRing(
-              habits: habitMaps,
+              habits: habits,
               completedIds: completed,
               pendingIds: pending,
               size: 20,
@@ -547,8 +548,8 @@ class _StripCell extends StatelessWidget {
 
 class _FullCalendarModal extends StatefulWidget {
   final DateTime selectedDate;
-  final List<dynamic> habits;
-  final Map<String, Map<String, dynamic>> activityByDate;
+  final List<Habit> habits;
+  final Map<String, HabitActivityDay> activityByDate;
   final void Function(DateTime) onSelectDate;
 
   const _FullCalendarModal({
@@ -568,7 +569,7 @@ class _FullCalendarModalState extends State<_FullCalendarModal> {
   late DateTime _selected;
 
   // Full activity fetch for all months
-  Map<String, Map<String, dynamic>> _fullActivity = {};
+  Map<String, HabitActivityDay> _fullActivity = {};
 
   @override
   void initState() {
@@ -598,10 +599,9 @@ class _FullCalendarModalState extends State<_FullCalendarModal> {
         dateFrom: _fmtDate(from),
         dateTo: _fmtDate(to),
       );
-      final map = <String, Map<String, dynamic>>{};
+      final map = <String, HabitActivityDay>{};
       for (final a in result) {
-        final d = a['date'] as String?;
-        if (d != null) map[d] = a as Map<String, dynamic>;
+        if (a.date.isNotEmpty) map[a.date] = a;
       }
       if (mounted) setState(() => _fullActivity = map);
     } catch (_) {}
@@ -725,8 +725,8 @@ class _FullCalendarModalState extends State<_FullCalendarModal> {
 class _MonthGrid extends StatelessWidget {
   final DateTime month;
   final DateTime selectedDate;
-  final List<dynamic> habits;
-  final Map<String, Map<String, dynamic>> activityByDate;
+  final List<Habit> habits;
+  final Map<String, HabitActivityDay> activityByDate;
   final void Function(DateTime) onSelectDate;
 
   const _MonthGrid({
@@ -753,8 +753,6 @@ class _MonthGrid extends StatelessWidget {
 
     final today = DateTime.now();
     final todayStripped = DateTime(today.year, today.month, today.day);
-    final habitMaps =
-        habits.whereType<Map<String, dynamic>>().toList();
 
     // Fixed row height: 28px date circle + 3px gap + 18px ring = 49px + vertical padding
     const double rowHeight = 52.0;
@@ -774,12 +772,8 @@ class _MonthGrid extends StatelessWidget {
                 final isSelected = d == selectedDate;
                 final ds = _fmtDate(d);
                 final activity = activityByDate[ds];
-                final completed = (activity?['completed_habit_ids'] as List?)
-                        ?.cast<int>() ??
-                    [];
-                final pending = (activity?['pending_habit_ids'] as List?)
-                        ?.cast<int>() ??
-                    [];
+                final completed = activity?.completedHabitIds ?? [];
+                final pending = activity?.pendingHabitIds ?? [];
 
                 return GestureDetector(
                   onTap: () => onSelectDate(d),
@@ -825,7 +819,7 @@ class _MonthGrid extends StatelessWidget {
                         if (isCurrentMonth &&
                             (completed.isNotEmpty || pending.isNotEmpty))
                           HabitActivityRing(
-                            habits: habitMaps,
+                            habits: habits,
                             completedIds: completed,
                             pendingIds: pending,
                             size: 18,
@@ -869,18 +863,16 @@ class _DashboardContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = data.summary;
-    final caloriesIn =
-        (s['calories_in'] as num?)?.toDouble() ?? 0;
-    final caloriesOut =
-        (s['calories_out'] as num?)?.toDouble() ?? 0;
+    final caloriesIn = s.caloriesInDouble;
+    final caloriesOut = s.caloriesOutDouble;
     final net = caloriesIn - caloriesOut;
 
     final totalProtein = data.meals.fold<double>(
-        0, (acc, m) => acc + ((m['protein'] as num?)?.toDouble() ?? 0));
+        0, (acc, m) => acc + m.protein);
     final totalCarbs = data.meals.fold<double>(
-        0, (acc, m) => acc + ((m['carbs'] as num?)?.toDouble() ?? 0));
+        0, (acc, m) => acc + m.carbs);
     final totalFat = data.meals.fold<double>(
-        0, (acc, m) => acc + ((m['fat'] as num?)?.toDouble() ?? 0));
+        0, (acc, m) => acc + m.fat);
 
     final isToday = _isToday;
     final nothingLoggedToday = isToday &&
@@ -1107,23 +1099,23 @@ class _SummaryStat extends StatelessWidget {
 }
 
 class _MealTile extends StatelessWidget {
-  final Map<String, dynamic> meal;
+  final Meal meal;
   const _MealTile({required this.meal});
 
   @override
   Widget build(BuildContext context) {
-    final cal = (meal['calories'] as num?)?.toDouble() ?? 0;
-    final items = (meal['items'] as List?) ?? [];
+    final cal = meal.calories;
+    final items = meal.items;
 
     String itemSummary = '';
     if (items.isNotEmpty) {
       final names = items.map((it) {
-        final name = (it['food_name'] as String?) ?? '';
+        final name = it.foodName;
         final gram =
-            (it['gram_weight'] as num?)?.toStringAsFixed(0) ?? '';
+            it.gramWeight > 0 ? it.gramWeight.toStringAsFixed(0) : '';
         return name.isNotEmpty
             ? (gram.isNotEmpty ? '$name (${gram}g)' : name)
-            : 'Food #${it['food_id']}';
+            : 'Food #${it.foodId}';
       }).toList();
       itemSummary = names.join(', ');
     } else {
@@ -1177,21 +1169,20 @@ class _MealTile extends StatelessWidget {
 }
 
 class _ExerciseTile extends StatelessWidget {
-  final Map<String, dynamic> exercise;
+  final Exercise exercise;
   const _ExerciseTile({required this.exercise});
 
   @override
   Widget build(BuildContext context) {
-    final name = exercise['name'] as String? ?? '';
-    final category = exercise['category'] as String? ?? '';
-    final cal =
-        (exercise['calories_burned'] as num?)?.toDouble() ?? 0;
-    final mins = exercise['duration_minutes'];
-    final reps = exercise['reps'];
-    final sets = exercise['sets'];
-    final weight = (exercise['weight_kg'] as num?)?.toDouble();
-    final dist = (exercise['distance_km'] as num?)?.toDouble();
-    final intensity = exercise['intensity'] as String?;
+    final name = exercise.name;
+    final category = exercise.category;
+    final cal = exercise.caloriesBurned;
+    final mins = exercise.durationMinutes;
+    final reps = exercise.reps;
+    final sets = exercise.sets;
+    final weight = exercise.weightKg;
+    final dist = exercise.distanceKm;
+    final intensity = exercise.intensity;
 
     IconData iconData = Icons.fitness_center;
     if (category == 'cardio') {

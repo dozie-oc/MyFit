@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../models/models.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
 import 'recommendation_sheet.dart';
@@ -18,20 +19,20 @@ class ExercisesScreen extends StatefulWidget {
 }
 
 class _ExercisesScreenState extends State<ExercisesScreen> {
-  late Future<List<dynamic>> _future;
+  late Future<List<Exercise>> _future;
   String _selectedCategory = 'all';
 
   @override
   void initState() {
     super.initState();
     _future = ApiClient.getExercises();
-    ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+    ApiClient.addDataListener(_onDataChanged, {DataScope.exercises});
     widget.tabNotifier?.addListener(_onTabActivated);
   }
 
   @override
   void dispose() {
-    ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    ApiClient.removeDataListener(_onDataChanged);
     widget.tabNotifier?.removeListener(_onTabActivated);
     super.dispose();
   }
@@ -118,7 +119,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
           ),
           const Divider(height: 1),
           Expanded(
-            child: FutureBuilder<List<dynamic>>(
+            child: FutureBuilder<List<Exercise>>(
               future: _future,
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
@@ -132,7 +133,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                 final exercises = _selectedCategory == 'all'
                     ? allExercises
                     : allExercises
-                        .where((e) => (e['category'] as String?)?.toLowerCase() == _selectedCategory)
+                        .where((e) => e.category.toLowerCase() == _selectedCategory)
                         .toList();
 
                 if (exercises.isEmpty) {
@@ -195,24 +196,24 @@ class _CategoryFilterChip extends StatelessWidget {
 }
 
 class _ExerciseCard extends StatelessWidget {
-  final Map<String, dynamic> exercise;
+  final Exercise exercise;
   final VoidCallback onDeleted;
   const _ExerciseCard(
       {required this.exercise, required this.onDeleted});
 
   @override
   Widget build(BuildContext context) {
-    final name = exercise['name'] as String? ?? '';
-    final date = exercise['date'] as String? ?? '';
-    final category = exercise['category'] as String? ?? 'other';
-    final cal = (exercise['calories_burned'] as num?)?.toDouble() ?? 0;
-    final mins = exercise['duration_minutes'];
-    final reps = exercise['reps'];
-    final sets = exercise['sets'];
-    final weight = (exercise['weight_kg'] as num?)?.toDouble();
-    final dist = (exercise['distance_km'] as num?)?.toDouble();
-    final intensity = exercise['intensity'] as String?;
-    final rir = exercise['rir'] as int?;
+    final name = exercise.name;
+    final date = exercise.date;
+    final category = exercise.category;
+    final cal = exercise.caloriesBurned;
+    final mins = exercise.durationMinutes;
+    final reps = exercise.reps;
+    final sets = exercise.sets;
+    final weight = exercise.weightKg;
+    final dist = exercise.distanceKm;
+    final intensity = exercise.intensity;
+    final rir = exercise.rir;
 
     IconData iconData = Icons.fitness_center;
     Color iconColor = const Color(0xFFEF4444);
@@ -303,8 +304,7 @@ class _ExerciseCard extends StatelessWidget {
                   GestureDetector(
                     onTap: () async {
                       try {
-                        await ApiClient.deleteExercise(
-                            exercise['id'] as int);
+                        await ApiClient.deleteExercise(exercise.id);
                         onDeleted();
                       } catch (_) {}
                     },
@@ -817,12 +817,13 @@ class _TrainingAdequacyBannerState extends State<_TrainingAdequacyBanner> {
   void initState() {
     super.initState();
     _future = ApiClient.getTrainingAdequacy();
-    ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+    ApiClient.addDataListener(
+        _onDataChanged, {DataScope.exercises, DataScope.goal});
   }
 
   @override
   void dispose() {
-    ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    ApiClient.removeDataListener(_onDataChanged);
     super.dispose();
   }
 

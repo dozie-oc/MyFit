@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../models/models.dart';
 import '../services/api_client.dart';
 import '../auth_state.dart';
 import '../theme.dart';
@@ -26,13 +27,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void initState() {
     super.initState();
     _future = _load();
-    ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+    ApiClient.addDataListener(_onDataChanged, {
+      DataScope.profile,
+      DataScope.goal,
+      DataScope.meals,
+      DataScope.exercises,
+    });
     widget.tabNotifier?.addListener(_onTabActivated);
   }
 
   @override
   void dispose() {
-    ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    ApiClient.removeDataListener(_onDataChanged);
     widget.tabNotifier?.removeListener(_onTabActivated);
     super.dispose();
   }
@@ -58,13 +64,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ApiClient.me(),
       ApiClient.getWeightLogs(),
       ApiClient.getAllSummaries(),
-      ApiClient.getGoal().catchError((_) => <String, dynamic>{}),
+      ApiClient.getGoal().catchError((_) => const UserGoal.empty()),
     ]);
     return _ProfileData(
-      user: results[0] as Map<String, dynamic>,
+      user: results[0] as UserProfile,
       weightLogs: results[1] as List<dynamic>,
-      summaries: results[2] as List<dynamic>,
-      goal: results[3] as Map<String, dynamic>,
+      summaries: results[2] as List<DailySummary>,
+      goal: results[3] as UserGoal,
     );
   }
 
@@ -132,15 +138,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
 }
 
 class _ProfileData {
-  final Map<String, dynamic> user;
+  final UserProfile user;
   final List<dynamic> weightLogs;
-  final List<dynamic> summaries;
-  final Map<String, dynamic> goal;
+  final List<DailySummary> summaries;
+  final UserGoal goal;
   const _ProfileData(
       {required this.user,
       required this.weightLogs,
       required this.summaries,
-      this.goal = const {}});
+      this.goal = const UserGoal.empty()});
 }
 
 class _ProfileContent extends StatefulWidget {
@@ -174,27 +180,21 @@ class _ProfileContentState extends State<_ProfileContent> {
   Widget build(BuildContext context) {
     final user = widget.data.user;
     final weightLogs = widget.data.weightLogs.cast<Map<String, dynamic>>();
-    final summaries = widget.data.summaries.cast<Map<String, dynamic>>();
+    final summaries = widget.data.summaries;
 
-    final currentWeight = (user['weight'] as num?)?.toDouble() ??
+    final currentWeight = user.weight ??
         (weightLogs.isNotEmpty ? (weightLogs.last['weight'] as num).toDouble() : 70.0);
-    final currentHeight = (user['height'] as num?)?.toDouble() ?? 175.0;
+    final currentHeight = user.height ?? 175.0;
 
     final avgCaloriesIn = summaries.isNotEmpty
         ? summaries.fold<double>(
-                0,
-                (acc, s) =>
-                    acc +
-                    ((s['calories_in'] as num?)?.toDouble() ?? 0)) /
+                0, (acc, s) => acc + s.caloriesIn) /
             summaries.length
         : 0.0;
 
     final avgCaloriesOut = summaries.isNotEmpty
         ? summaries.fold<double>(
-                0,
-                (acc, s) =>
-                    acc +
-                    ((s['calories_out'] as num?)?.toDouble() ?? 0)) /
+                0, (acc, s) => acc + s.caloriesOut) /
             summaries.length
         : 0.0;
 
@@ -227,8 +227,9 @@ class _ProfileContentState extends State<_ProfileContent> {
                 backgroundColor:
                     Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
                 child: Text(
-                  (user['username'] as String? ?? 'U')
-                      .substring(0, 1)
+                  (user.username.isNotEmpty
+                          ? user.username.substring(0, 1)
+                          : 'U')
                       .toUpperCase(),
                   style: TextStyle(
                     fontSize: 22,
@@ -241,10 +242,10 @@ class _ProfileContentState extends State<_ProfileContent> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(user['username'] as String? ?? '',
+                  Text(user.username,
                       style: const TextStyle(
                           fontSize: 18, fontWeight: FontWeight.w700)),
-                  Text('Age ${user['age'] ?? '—'} · Member',
+                  Text('Age ${user.age ?? '—'} · Member',
                       style: const TextStyle(
                           fontSize: 13, color: Color(0xFF9CA3AF))),
                 ],
@@ -269,7 +270,7 @@ class _ProfileContentState extends State<_ProfileContent> {
             label: const Text('Edit', style: TextStyle(fontSize: 13)),
           ),
         ),
-        _GoalCard(goal: widget.data.goal),
+        GoalCard(goal: widget.data.goal),
 
         // ── Physical stats & Measurements Card ──────────────────
         SectionHeader(
@@ -475,10 +476,10 @@ class _ProfileContentState extends State<_ProfileContent> {
                     child: Row(
                       children: [
                         Expanded(
-                            child: Text(s['date'] as String? ?? '',
+                            child: Text(s.date,
                                 style: const TextStyle(fontSize: 13))),
                         Text(
-                            '${(s['calories_in'] as num?)?.toStringAsFixed(0) ?? 0} in',
+                            '${s.caloriesIn} in',
                             style: const TextStyle(
                                 fontSize: 12,
                                 color: Color(0xFF2563EB))),
@@ -486,7 +487,7 @@ class _ProfileContentState extends State<_ProfileContent> {
                             style:
                                 TextStyle(color: Color(0xFFD1D5DB))),
                         Text(
-                            '${(s['calories_out'] as num?)?.toStringAsFixed(0) ?? 0} burned',
+                            '${s.caloriesOut} burned',
                             style: const TextStyle(
                                 fontSize: 12,
                                 color: Color(0xFFEF4444))),
@@ -804,9 +805,9 @@ class _QuickLogWeightSheetState extends State<_QuickLogWeightSheet> {
 // GOAL CARD
 // ─────────────────────────────────────────
 
-class _GoalCard extends StatelessWidget {
-  final Map<String, dynamic> goal;
-  const _GoalCard({required this.goal});
+class GoalCard extends StatelessWidget {
+  final UserGoal goal;
+  const GoalCard({super.key, required this.goal});
 
   static const _goalLabels = {
     'lose_weight': 'Lose Weight',
@@ -828,14 +829,14 @@ class _GoalCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final goalType = goal['goal_type'] as String?;
-    final activityLevel = goal['activity_level'] as String?;
-    final trainingDays = goal['training_days_per_week'] as int?;
-    final experience = goal['training_experience'] as String?;
-    final dietPref = goal['dietary_preference'] as String?;
-    final targetWeight = goal['target_weight'];
+    final goalType = goal.goalType;
+    final activityLevel = goal.activityLevel;
+    final trainingDays = goal.trainingDaysPerWeek;
+    final experience = goal.trainingExperience;
+    final dietPref = goal.dietaryPreference;
+    final targetWeight = goal.targetWeight;
 
-    final hasGoal = goalType != null;
+    final hasGoal = goal.hasGoal;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -859,7 +860,7 @@ class _GoalCard extends StatelessWidget {
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: Text(
-                            _goalLabels[goalType] ?? goalType,
+                            _goalLabels[goalType] ?? goalType ?? '',
                             style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,

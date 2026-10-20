@@ -28,46 +28,60 @@ router = APIRouter(
 # ============================================================
 
 
-def build_food_response(
+def build_food_responses(
     session: SessionDep,
-    food: FoodItem,
-) -> FoodItemOut:
+    foods: list[FoodItem],
+) -> list[FoodItemOut]:
     """
-    Build the API representation of a FoodItem.
+    Build API representations for many FoodItems using a single
+    portions query (instead of one query per food).
 
-    FoodItem does not currently define a SQLModel relationship to
-    FoodPortion, so portions are retrieved explicitly.
-
-    Keeping this here gives us a single place to construct the
-    response instead of duplicating the portion query across
-    multiple endpoints.
+    FoodItem does not define a SQLModel relationship to FoodPortion,
+    so portions are fetched explicitly and grouped by food id.
     """
+
+    if not foods:
+        return []
 
     portions = session.exec(
         select(FoodPortion)
         .where(
-            FoodPortion.food_id == food.id
+            FoodPortion.food_id.in_([f.id for f in foods])
         )
         .order_by(FoodPortion.name)
     ).all()
 
-    return FoodItemOut(
-        id=food.id,
-        name=food.name,
-        usda_fdc_id=food.usda_fdc_id,
-        usda_data_type=food.usda_data_type,
-        calories_per_100g=food.calories_per_100g,
-        protein_per_100g=food.protein_per_100g,
-        carbs_per_100g=food.carbs_per_100g,
-        fat_per_100g=food.fat_per_100g,
-        base_unit=food.base_unit,
-        portions=[
-            FoodPortionOut.model_validate(
-                portion
-            )
-            for portion in portions
-        ],
-    )
+    portions_by_food: dict[int, list[FoodPortion]] = {}
+    for portion in portions:
+        portions_by_food.setdefault(portion.food_id, []).append(portion)
+
+    return [
+        FoodItemOut(
+            id=food.id,
+            name=food.name,
+            usda_fdc_id=food.usda_fdc_id,
+            usda_data_type=food.usda_data_type,
+            calories_per_100g=food.calories_per_100g,
+            protein_per_100g=food.protein_per_100g,
+            carbs_per_100g=food.carbs_per_100g,
+            fat_per_100g=food.fat_per_100g,
+            base_unit=food.base_unit,
+            portions=[
+                FoodPortionOut.model_validate(portion)
+                for portion in portions_by_food.get(food.id, [])
+            ],
+        )
+        for food in foods
+    ]
+
+
+def build_food_response(
+    session: SessionDep,
+    food: FoodItem,
+) -> FoodItemOut:
+    """Build the API representation of a single FoodItem."""
+
+    return build_food_responses(session, [food])[0]
 
 
 # ============================================================
@@ -116,13 +130,7 @@ def get_foods(
         statement
     ).all()
 
-    return [
-        build_food_response(
-            session,
-            food,
-        )
-        for food in foods
-    ]
+    return build_food_responses(session, foods)
 
 
 @router.get(
@@ -175,13 +183,7 @@ def search_local_foods(
         statement
     ).all()
 
-    return [
-        build_food_response(
-            session,
-            food,
-        )
-        for food in foods
-    ]
+    return build_food_responses(session, foods)
 
 
 @router.get(

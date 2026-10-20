@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'auth_state.dart';
+import 'models/models.dart';
 import 'theme.dart';
 import 'screens/auth_screen.dart';
 import 'screens/dashboard_screen.dart';
@@ -94,7 +95,7 @@ class _MainShellState extends State<MainShell> {
         icon: Icons.home_outlined,
         activeIcon: Icons.home,
         screen: DashboardScreen(
-          user: widget.authState.user ?? {},
+          user: widget.authState.user ?? const UserProfile.empty(),
           tabNotifier: _tabNotifiers[0],
         ),
       ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../models/models.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
 import 'recommendation_sheet.dart';
@@ -18,19 +19,19 @@ class MealsScreen extends StatefulWidget {
 }
 
 class _MealsScreenState extends State<MealsScreen> {
-  late Future<List<dynamic>> _future;
+  late Future<List<Meal>> _future;
 
   @override
   void initState() {
     super.initState();
     _future = ApiClient.getMeals();
-    ApiClient.dataChangeNotifier.addListener(_onDataChanged);
+    ApiClient.addDataListener(_onDataChanged, {DataScope.meals});
     widget.tabNotifier?.addListener(_onTabActivated);
   }
 
   @override
   void dispose() {
-    ApiClient.dataChangeNotifier.removeListener(_onDataChanged);
+    ApiClient.removeDataListener(_onDataChanged);
     widget.tabNotifier?.removeListener(_onTabActivated);
     super.dispose();
   }
@@ -75,7 +76,7 @@ class _MealsScreenState extends State<MealsScreen> {
         ],
       ),
       floatingActionButton: const RecommendationFAB(filterType: 'meal'),
-      body: FutureBuilder<List<dynamic>>(
+      body: FutureBuilder<List<Meal>>(
         future: _future,
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
@@ -119,32 +120,32 @@ class _MealsScreenState extends State<MealsScreen> {
 }
 
 class _MealCard extends StatelessWidget {
-  final Map<String, dynamic> meal;
+  final Meal meal;
   final VoidCallback onDeleted;
   const _MealCard({required this.meal, required this.onDeleted});
 
   @override
   Widget build(BuildContext context) {
-    final date = meal['date'] as String? ?? '';
-    final cal = (meal['calories'] as num?)?.toDouble() ?? 0;
-    final protein = (meal['protein'] as num?)?.toDouble() ?? 0;
-    final carbs = (meal['carbs'] as num?)?.toDouble() ?? 0;
-    final fat = (meal['fat'] as num?)?.toDouble() ?? 0;
-    final items = (meal['items'] as List?) ?? [];
+    final date = meal.date;
+    final cal = meal.calories;
+    final protein = meal.protein;
+    final carbs = meal.carbs;
+    final fat = meal.fat;
+    final items = meal.items;
 
     String itemSummary = '';
     if (items.isNotEmpty) {
       final names = items.map((it) {
-        final name = (it['food_name'] as String?) ?? '';
-        final gram = (it['gram_weight'] as num?)?.toStringAsFixed(0) ?? '';
-        return name.isNotEmpty ? (gram.isNotEmpty ? '$name (${gram}g)' : name) : 'Food #${it['food_id']}';
+        final name = it.foodName;
+        final gram = it.gramWeight > 0 ? it.gramWeight.toStringAsFixed(0) : '';
+        return name.isNotEmpty ? (gram.isNotEmpty ? '$name (${gram}g)' : name) : 'Food #${it.foodId}';
       }).toList();
       itemSummary = names.join(', ');
     } else {
       itemSummary = 'No food items';
     }
 
-    final mealType = (meal['meal_type'] as String? ?? 'snack').toUpperCase();
+    final mealType = meal.mealType.toUpperCase();
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
@@ -205,7 +206,7 @@ class _MealCard extends StatelessWidget {
     );
   }
 
-  void _showDetail(BuildContext context, Map<String, dynamic> meal,
+  void _showDetail(BuildContext context, Meal meal,
       VoidCallback onDeleted) {
     showModalBottomSheet(
       context: context,
@@ -219,14 +220,14 @@ class _MealCard extends StatelessWidget {
 }
 
 class _MealDetailSheet extends StatelessWidget {
-  final Map<String, dynamic> meal;
+  final Meal meal;
   final VoidCallback onDeleted;
   const _MealDetailSheet(
       {required this.meal, required this.onDeleted});
 
   @override
   Widget build(BuildContext context) {
-    final items = (meal['items'] as List?) ?? [];
+    final items = meal.items;
     return DraggableScrollableSheet(
       expand: false,
       initialChildSize: 0.65,
@@ -247,7 +248,7 @@ class _MealDetailSheet extends StatelessWidget {
           Row(
             children: [
               Text(
-                '${(meal['meal_type'] as String? ?? 'snack').toUpperCase()} · ${meal['date'] as String? ?? ''}',
+                '${meal.mealType.toUpperCase()} · ${meal.date}',
                 style: const TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w600),
               ),
@@ -258,7 +259,7 @@ class _MealDetailSheet extends StatelessWidget {
                 onPressed: () async {
                   Navigator.pop(context);
                   try {
-                    await ApiClient.deleteMeal(meal['id'] as int);
+                    await ApiClient.deleteMeal(meal.id);
                     onDeleted();
                   } catch (_) {}
                 },
@@ -266,12 +267,10 @@ class _MealDetailSheet extends StatelessWidget {
             ],
           ),
           NutrientRow(
-            calories:
-                (meal['calories'] as num?)?.toDouble() ?? 0,
-            protein:
-                (meal['protein'] as num?)?.toDouble() ?? 0,
-            carbs: (meal['carbs'] as num?)?.toDouble() ?? 0,
-            fat: (meal['fat'] as num?)?.toDouble() ?? 0,
+            calories: meal.calories,
+            protein: meal.protein,
+            carbs: meal.carbs,
+            fat: meal.fat,
           ),
           const SizedBox(height: 16),
           const Text('Food Items',
@@ -281,11 +280,10 @@ class _MealDetailSheet extends StatelessWidget {
                   fontWeight: FontWeight.w500)),
           const SizedBox(height: 8),
           ...items.map((item) {
-            final cal =
-                (item['calories'] as num?)?.toDouble() ?? 0;
-            final foodName = (item['food_name'] as String?) ?? 'Food #${item['food_id']}';
-            final portionName = (item['portion_name'] as String?);
-            final gramWeight = (item['gram_weight'] as num?)?.toStringAsFixed(0) ?? '?';
+            final cal = item.calories;
+            final foodName = item.foodName.isNotEmpty ? item.foodName : 'Food #${item.foodId}';
+            final portionName = item.portionName;
+            final gramWeight = item.gramWeight > 0 ? item.gramWeight.toStringAsFixed(0) : '?';
             
             final labelText = portionName != null && portionName.isNotEmpty
                 ? '$foodName ($portionName · ${gramWeight}g)'
@@ -508,9 +506,9 @@ class _AddMealItemSheetState extends State<_AddMealItemSheet> {
   final _qtyCtrl = TextEditingController(text: '100');
   final _unitCtrl = TextEditingController(text: 'g');
 
-  List<dynamic>? _foods;
-  Map<String, dynamic>? _selected;
-  Map<String, dynamic>? _selectedPortion;
+  List<FoodItem>? _foods;
+  FoodItem? _selected;
+  FoodPortion? _selectedPortion;
   bool _loading = false;
 
   @override
@@ -535,14 +533,14 @@ class _AddMealItemSheetState extends State<_AddMealItemSheet> {
     if (qty <= 0) return;
 
     final item = <String, dynamic>{
-      'food_id': _selected!['id'],
-      'food_name': _selected!['name'],
+      'food_id': _selected!.id,
+      'food_name': _selected!.name,
       'quantity': qty,
     };
 
     if (_selectedPortion != null) {
-      item['portion_id'] = _selectedPortion!['id'];
-      item['portion_name'] = _selectedPortion!['name'];
+      item['portion_id'] = _selectedPortion!.id;
+      item['portion_name'] = _selectedPortion!.name;
     } else {
       item['unit'] = _unitCtrl.text.trim().toLowerCase();
     }
@@ -552,9 +550,7 @@ class _AddMealItemSheetState extends State<_AddMealItemSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final portions = _selected != null
-        ? ((_selected!['portions'] as List?) ?? [])
-        : <dynamic>[];
+    final portions = _selected?.portions ?? const <FoodPortion>[];
 
     return Padding(
       padding: EdgeInsets.only(
@@ -615,13 +611,13 @@ class _AddMealItemSheetState extends State<_AddMealItemSheet> {
                   shrinkWrap: true,
                   itemCount: _foods!.length,
                   itemBuilder: (_, i) {
-                    final f = _foods![i] as Map<String, dynamic>;
+                    final f = _foods![i];
                     final isSelected =
-                        _selected?['id'] == f['id'];
+                        _selected?.id == f.id;
                     return ListTile(
                       dense: true,
                       selected: isSelected,
-                      title: Text(f['name'] as String? ?? '',
+                      title: Text(f.name,
                           style: const TextStyle(fontSize: 13)),
                       onTap: () => setState(() {
                         _selected = f;
@@ -639,9 +635,9 @@ class _AddMealItemSheetState extends State<_AddMealItemSheet> {
               const SizedBox(height: 16),
               const Divider(),
               const SizedBox(height: 8),
-              Text('Selected: ${_selected!['name']}',
+              Text('Selected: ${_selected!.name}',
                   style: const TextStyle(
-                      fontWeight: FontWeight.w600, fontSize: 13)),
+                       fontWeight: FontWeight.w600, fontSize: 13)),
               const SizedBox(height: 12),
               if (portions.isNotEmpty) ...[
                 const Text('Choose a serving size',
@@ -659,9 +655,9 @@ class _AddMealItemSheetState extends State<_AddMealItemSheet> {
                     ),
                     ...portions.map((p) {
                       final isSelected =
-                          _selectedPortion?['id'] == p['id'];
+                          _selectedPortion?.id == p.id;
                       return ChoiceChip(
-                        label: Text('${p['name']} (${(p['gram_weight'] as num?)?.toStringAsFixed(0)}g)'),
+                        label: Text('${p.name} (${p.gramWeight.toStringAsFixed(0)}g)'),
                         selected: isSelected,
                         onSelected: (_) =>
                             setState(() => _selectedPortion = p),

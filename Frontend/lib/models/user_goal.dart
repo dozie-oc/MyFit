@@ -1,0 +1,111 @@
+class UserGoal {
+  final int? id;
+  final String? goalType;
+  final double? targetWeight;
+  final String? targetDate;
+  final String? activityLevel;
+  final int? trainingDaysPerWeek;
+  final String? trainingExperience;
+  final String? availableEquipment;
+  final String? dietaryPreference;
+  final String? foodsToAvoid;
+
+  const UserGoal({
+    this.id,
+    this.goalType,
+    this.targetWeight,
+    this.targetDate,
+    this.activityLevel,
+    this.trainingDaysPerWeek,
+    this.trainingExperience,
+    this.availableEquipment,
+    this.dietaryPreference,
+    this.foodsToAvoid,
+  });
+
+  const UserGoal.empty()
+      : id = null,
+        goalType = null,
+        targetWeight = null,
+        targetDate = null,
+        activityLevel = null,
+        trainingDaysPerWeek = null,
+        trainingExperience = null,
+        availableEquipment = null,
+        dietaryPreference = null,
+        foodsToAvoid = null;
+
+  bool get hasGoal =>
+      id != null || (goalType != null && goalType!.trim().isNotEmpty);
+
+  List<String> get equipmentList {
+    if (availableEquipment == null || availableEquipment!.trim().isEmpty) {
+      return const [];
+    }
+    return availableEquipment!
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
+
+  factory UserGoal.fromJson(Map<String, dynamic> json) {
+    return UserGoal(
+      id: json['id'] as int?,
+      goalType: json['goal_type'] as String?,
+      targetWeight: (json['target_weight'] as num?)?.toDouble(),
+      targetDate: json['target_date'] as String?,
+      activityLevel: json['activity_level'] as String?,
+      trainingDaysPerWeek: json['training_days_per_week'] as int?,
+      trainingExperience: json['training_experience'] as String?,
+      availableEquipment: json['available_equipment'] as String?,
+      dietaryPreference: json['dietary_preference'] as String?,
+      foodsToAvoid: json['foods_to_avoid'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson({bool excludeUnset = false}) {
+    final map = <String, dynamic>{
+      'id': id,
+      'goal_type': goalType,
+      'target_weight': targetWeight,
+      'target_date': targetDate,
+      'activity_level': activityLevel,
+      'training_days_per_week': trainingDaysPerWeek,
+      'training_experience': trainingExperience,
+      'available_equipment': availableEquipment,
+      'dietary_preference': dietaryPreference,
+      'foods_to_avoid': foodsToAvoid,
+    };
+    if (excludeUnset) {
+      map.removeWhere((_, v) => v == null);
+    }
+    return map;
+  }
+
+  UserGoal copyWith({
+    int? id,
+    String? goalType,
+    double? targetWeight,
+    String? targetDate,
+    String? activityLevel,
+    int? trainingDaysPerWeek,
+    String? trainingExperience,
+    String? availableEquipment,
+    String? dietaryPreference,
+    String? foodsToAvoid,
+  }) {
+    return UserGoal(
+      id: id ?? this.id,
+      goalType: goalType ?? this.goalType,
+      targetWeight: targetWeight ?? this.targetWeight,
+      targetDate: targetDate ?? this.targetDate,
+      activityLevel: activityLevel ?? this.activityLevel,
+      trainingDaysPerWeek: trainingDaysPerWeek ?? this.trainingDaysPerWeek,
+      trainingExperience: trainingExperience ?? this.trainingExperience,
+      availableEquipment: availableEquipment ?? this.availableEquipment,
+      dietaryPreference: dietaryPreference ?? this.dietaryPreference,
+      foodsToAvoid: foodsToAvoid ?? this.foodsToAvoid,
+    );
+  }
+}
