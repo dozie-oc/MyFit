@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../auth_state.dart';
+import '../services/api_client.dart' show kEnableDevAdmin;
 
 // ─────────────────────────────────────────
 // LOGIN SCREEN
@@ -119,6 +120,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 : const Text('Sign In'),
                           ),
                         ),
+                        if (kEnableDevAdmin) ...[
                         const SizedBox(height: 12),
                         ListenableBuilder(
                           listenable: widget.authState,
@@ -133,6 +135,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ),
                         ),
+                        ],
                         const SizedBox(height: 16),
                         TextButton(
                           onPressed: _navigateToRegister,

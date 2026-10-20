@@ -9,6 +9,9 @@ import '../models/models.dart';
 // CONFIG
 // ─────────────────────────────────────────
 
+const bool kEnableDevAdmin =
+    bool.fromEnvironment('ENABLE_DEV_ADMIN', defaultValue: kDebugMode);
+
 String get kBaseUrl {
   if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
     return 'http://10.0.2.2:8000';

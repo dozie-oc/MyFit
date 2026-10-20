@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
@@ -10,6 +10,7 @@ from src.auth.auth import (
     hash_password,
 )
 from src.auth.users import calculate_age
+from src.config import settings
 from src.dependencies import CurrentUserDep, SessionDep
 from src.models import User, WeightLog
 from src.schemas import (
@@ -153,8 +154,15 @@ def login(
     )
 
 
+def require_dev_admin() -> None:
+    if not settings.enable_dev_admin:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
 @router.post(
     "/admin-login",
+    include_in_schema=settings.enable_dev_admin,
+    dependencies=[Depends(require_dev_admin)],
     response_model=Token,
 )
 def admin_login(

@@ -5,6 +5,7 @@ from sqlmodel import Session, SQLModel
 
 from src.auth.auth import hash_password
 from src.database import get_session
+from src.config import settings
 from src.main import app
 from src.models import FoodItem, FoodPortion, User
 from tests.conftest import make_test_engine
@@ -343,7 +344,13 @@ def test_daily_summary_calculation(client, auth_headers, sample_food):
     assert len(all_res.json()) >= 1
 
 
-def test_admin_login_and_seeding(client):
+def test_admin_login_disabled_by_default(client, monkeypatch):
+    monkeypatch.setattr(settings, "enable_dev_admin", False)
+    assert client.post("/auth/admin-login").status_code == 404
+
+
+def test_admin_login_and_seeding(client, monkeypatch):
+    monkeypatch.setattr(settings, "enable_dev_admin", True)
     response = client.post("/auth/admin-login")
     assert response.status_code == 200
     token = response.json()["access_token"]

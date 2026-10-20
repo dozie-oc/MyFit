@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # changes to the application-level database logic.
     database_url: str = "sqlite:///./myfit.db"
 
+    # Enables /auth/admin-login and seeding of the dev admin user.
+    enable_dev_admin: bool = False
+
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, value: str) -> str:
