@@ -396,6 +396,17 @@ def delete_habit_log(
     current_user: CurrentUserDep,
 ):
     """Remove a specific daily log entry (un-complete a day)."""
+    habit = session.exec(
+        select(Habit).where(
+            Habit.id == habit_id,
+            Habit.user_id == current_user.id,
+            Habit.deleted_at.is_(None)
+        )
+    ).first()
+
+    if not habit:
+        raise HTTPException(status_code=404, detail="Habit not found")
+
     log = session.exec(
         select(HabitLog).where(
             HabitLog.habit_id == habit_id,
