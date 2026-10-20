@@ -383,3 +383,32 @@ def test_admin_login_and_seeding(client, monkeypatch):
     assert weight_res.status_code == 200
     assert len(weight_res.json()) >= 1
 
+
+
+def test_weight_same_date_upserts(client, auth_headers):
+    first = client.post(
+        "/weight", json={"date": "2020-01-10", "weight": 70.0}, headers=auth_headers
+    )
+    second = client.post(
+        "/weight", json={"date": "2020-01-10", "weight": 71.0}, headers=auth_headers
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    logs = client.get("/weight", headers=auth_headers).json()
+    same_day = [log for log in logs if log["date"] == "2020-01-10"]
+    assert len(same_day) == 1
+    assert same_day[0]["weight"] == 71.0
+
+
+def test_weight_only_newest_entry_updates_user_weight(client, auth_headers):
+    client.post(
+        "/weight", json={"date": "2020-02-01", "weight": 80.0}, headers=auth_headers
+    )
+    client.post(
+        "/weight", json={"date": "2020-01-01", "weight": 60.0}, headers=auth_headers
+    )
+    assert client.get("/auth/me", headers=auth_headers).json()["weight"] == 80.0
+    client.post(
+        "/weight", json={"date": "2020-03-01", "weight": 81.0}, headers=auth_headers
+    )
+    assert client.get("/auth/me", headers=auth_headers).json()["weight"] == 81.0
