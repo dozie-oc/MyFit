@@ -474,30 +474,6 @@ class FoodService:
     # DATABASE LOOKUPS
     # ============================================================
 
-    def get_local_food(
-        self,
-        food_id: int,
-    ) -> FoodItem | None:
-
-        return self.session.exec(
-            select(FoodItem).where(
-                FoodItem.id == food_id,
-                FoodItem.deleted_at.is_(None),
-            )
-        ).first()
-
-    def get_local_food_by_usda_id(
-        self,
-        fdc_id: int,
-    ) -> FoodItem | None:
-
-        return self.session.exec(
-            select(FoodItem).where(
-                FoodItem.usda_fdc_id == fdc_id,
-                FoodItem.deleted_at.is_(None),
-            )
-        ).first()
-
     def get_food_by_usda_id(
         self,
         fdc_id: int,
@@ -506,17 +482,6 @@ class FoodService:
         return self.session.exec(
             select(FoodItem).where(
                 FoodItem.usda_fdc_id == fdc_id,
-            )
-        ).first()
-
-    def get_food_portion(
-        self,
-        portion_id: int,
-    ) -> FoodPortion | None:
-
-        return self.session.exec(
-            select(FoodPortion).where(
-                FoodPortion.id == portion_id,
             )
         ).first()
 

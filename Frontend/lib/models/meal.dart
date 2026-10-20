@@ -43,23 +43,6 @@ class MealItem {
       fat: (json['fat'] as num?)?.toDouble() ?? 0.0,
     );
   }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'food_id': foodId,
-      'food_name': foodName,
-      'portion_id': portionId,
-      'portion_name': portionName,
-      'quantity': quantity,
-      'unit': unit,
-      'gram_weight': gramWeight,
-      'calories': calories,
-      'protein': protein,
-      'carbs': carbs,
-      'fat': fat,
-    };
-  }
 }
 
 class Meal {
@@ -100,19 +83,5 @@ class Meal {
               .toList() ??
           const [],
     );
-  }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'date': date,
-      'meal_type': mealType,
-      'calories': calories,
-      'protein': protein,
-      'carbs': carbs,
-      'fat': fat,
-      'created_at': createdAt,
-      'items': items.map((i) => i.toJson()).toList(),
-    };
   }
 }

@@ -43,33 +43,4 @@ class UserProfile {
       age: json['age'] as int?,
     );
   }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'username': username,
-      'weight': weight,
-      'height': height,
-      'birthdate': birthdate,
-      'age': age,
-    };
-  }
-
-  UserProfile copyWith({
-    int? id,
-    String? username,
-    double? weight,
-    double? height,
-    String? birthdate,
-    int? age,
-  }) {
-    return UserProfile(
-      id: id ?? this.id,
-      username: username ?? this.username,
-      weight: weight ?? this.weight,
-      height: height ?? this.height,
-      birthdate: birthdate ?? this.birthdate,
-      age: age ?? this.age,
-    );
-  }
 }

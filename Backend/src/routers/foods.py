@@ -8,7 +8,6 @@ from src.schemas import (
     FoodItemOut,
     FoodPortionOut,
     FoodSearchResult,
-    FoodSearchResponse,
 )
 from src.services.food_service import FoodService
 from src.services.usda_client import (

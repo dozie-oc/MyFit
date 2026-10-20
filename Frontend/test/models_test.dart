@@ -61,7 +61,7 @@ void main() {
   });
 
   group('DailySummary Model', () {
-    test('fromJson and toJson roundtrip', () {
+    test('fromJson parses values', () {
       final json = {
         'date': '2026-10-19',
         'calories_in': 2100,
@@ -77,10 +77,6 @@ void main() {
       expect(summary.caloriesInDouble, 2100.0);
       expect(summary.caloriesOutDouble, 550.0);
       expect(summary.netCaloriesDouble, 1550.0);
-
-      final out = summary.toJson();
-      expect(out['calories_in'], 2100);
-      expect(out['calories_out'], 550);
     });
 
     test('DailySummary.empty constructor', () {

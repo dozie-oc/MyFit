@@ -28,18 +28,6 @@ class Habit {
       createdAt: json['created_at']?.toString(),
     );
   }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'name': name,
-      'description': description,
-      'frequency': frequency,
-      'color': color,
-      'target_per_week': targetPerWeek,
-      'created_at': createdAt,
-    };
-  }
 }
 
 class HabitActivityDay {
@@ -65,13 +53,5 @@ class HabitActivityDay {
               .toList() ??
           const [],
     );
-  }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'date': date,
-      'completed_habit_ids': completedHabitIds,
-      'pending_habit_ids': pendingHabitIds,
-    };
   }
 }

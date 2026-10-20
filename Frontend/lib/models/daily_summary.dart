@@ -33,27 +33,4 @@ class DailySummary {
       netCalories: net,
     );
   }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'date': date,
-      'calories_in': caloriesIn,
-      'calories_out': caloriesOut,
-      'net_calories': netCalories,
-    };
-  }
-
-  DailySummary copyWith({
-    String? date,
-    int? caloriesIn,
-    int? caloriesOut,
-    int? netCalories,
-  }) {
-    return DailySummary(
-      date: date ?? this.date,
-      caloriesIn: caloriesIn ?? this.caloriesIn,
-      caloriesOut: caloriesOut ?? this.caloriesOut,
-      netCalories: netCalories ?? this.netCalories,
-    );
-  }
 }

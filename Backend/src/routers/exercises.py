@@ -13,7 +13,10 @@ from src.schemas import (
     MuscleGroupStatus,
 )
 from src.routers.daily_summary import calculate_daily_summary
-from src.services.training_service import INTENSITY_MULTIPLIERS
+from src.services.training_service import (
+    INTENSITY_MULTIPLIERS,
+    evaluate_training_adequacy,
+)
 
 
 router = APIRouter(
@@ -137,8 +140,6 @@ def get_training_adequacy(
     - Suggested next exercises based on undertrained areas
     - Human-readable summary and detail text
     """
-    from src.services.training_service import evaluate_training_adequacy
-
     goal: UserGoal | None = session.exec(
         select(UserGoal).where(UserGoal.user_id == current_user.id)
     ).first()

@@ -25,17 +25,6 @@ class FoodPortion {
       usdaMeasureUnit: json['usda_measure_unit'] as String?,
     );
   }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'name': name,
-      'quantity': quantity,
-      'unit': unit,
-      'gram_weight': gramWeight,
-      'usda_measure_unit': usdaMeasureUnit,
-    };
-  }
 }
 
 class FoodItem {
@@ -79,20 +68,5 @@ class FoodItem {
               .toList() ??
           const [],
     );
-  }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'name': name,
-      'usda_fdc_id': usdaFdcId,
-      'usda_data_type': usdaDataType,
-      'calories_per_100g': caloriesPer100g,
-      'protein_per_100g': proteinPer100g,
-      'carbs_per_100g': carbsPer100g,
-      'fat_per_100g': fatPer100g,
-      'base_unit': baseUnit,
-      'portions': portions.map((p) => p.toJson()).toList(),
-    };
   }
 }

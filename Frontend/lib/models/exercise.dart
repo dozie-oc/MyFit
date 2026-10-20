@@ -46,22 +46,4 @@ class Exercise {
       caloriesBurned: (json['calories_burned'] as num?)?.toDouble() ?? 0.0,
     );
   }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'date': date,
-      'name': name,
-      'category': category,
-      'exercise_catalog_id': exerciseCatalogId,
-      'sets': sets,
-      'reps': reps,
-      'weight_kg': weightKg,
-      'duration_minutes': durationMinutes,
-      'distance_km': distanceKm,
-      'intensity': intensity,
-      'rir': rir,
-      'calories_burned': caloriesBurned,
-    };
-  }
 }

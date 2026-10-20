@@ -88,27 +88,6 @@ class FoodSearchResult(BaseModel):
     data_type: str | None = None
 
 
-class FoodSearchResponse(BaseModel):
-    """Response returned by the food search endpoint."""
-
-    foods: list[FoodSearchResult]
-    total_hits: int
-
-
-class FoodImportRequest(BaseModel):
-    """
-    Optional request body for importing a USDA food.
-
-    The FDC ID itself is normally supplied as part of the URL, e.g.
-        POST /foods/import/12345
-
-    Keeping this schema empty is unnecessary, so no request body is
-    required for the current MVP.
-    """
-
-    pass
-
-
 class FoodPortionOut(BaseModel):
     """A human-friendly serving size for a FoodItem."""
 

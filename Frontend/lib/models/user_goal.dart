@@ -78,30 +78,4 @@ class UserGoal {
       'foods_to_avoid': foodsToAvoid,
     };
   }
-
-  UserGoal copyWith({
-    int? id,
-    String? goalType,
-    double? targetWeight,
-    String? targetDate,
-    String? activityLevel,
-    int? trainingDaysPerWeek,
-    String? trainingExperience,
-    String? availableEquipment,
-    String? dietaryPreference,
-    String? foodsToAvoid,
-  }) {
-    return UserGoal(
-      id: id ?? this.id,
-      goalType: goalType ?? this.goalType,
-      targetWeight: targetWeight ?? this.targetWeight,
-      targetDate: targetDate ?? this.targetDate,
-      activityLevel: activityLevel ?? this.activityLevel,
-      trainingDaysPerWeek: trainingDaysPerWeek ?? this.trainingDaysPerWeek,
-      trainingExperience: trainingExperience ?? this.trainingExperience,
-      availableEquipment: availableEquipment ?? this.availableEquipment,
-      dietaryPreference: dietaryPreference ?? this.dietaryPreference,
-      foodsToAvoid: foodsToAvoid ?? this.foodsToAvoid,
-    );
-  }
 }
