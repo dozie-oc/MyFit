@@ -453,10 +453,8 @@ class ApiClient {
     return UserGoal.fromJson(res as Map<String, dynamic>);
   }
 
-  static Future<UserGoal> upsertGoal(dynamic body) async {
-    final payload = body is UserGoal
-        ? body.toJson(excludeUnset: true)
-        : (body as Map<String, dynamic>);
+  static Future<UserGoal> upsertGoal(UserGoal goal) async {
+    final payload = goal.toJson()..remove('id');
     final res = await post('/goals', payload);
     notifyDataChanged({DataScope.goal});
     return UserGoal.fromJson(res as Map<String, dynamic>);

@@ -64,8 +64,8 @@ class UserGoal {
     );
   }
 
-  Map<String, dynamic> toJson({bool excludeUnset = false}) {
-    final map = <String, dynamic>{
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
       'id': id,
       'goal_type': goalType,
       'target_weight': targetWeight,
@@ -77,10 +77,6 @@ class UserGoal {
       'dietary_preference': dietaryPreference,
       'foods_to_avoid': foodsToAvoid,
     };
-    if (excludeUnset) {
-      map.removeWhere((_, v) => v == null);
-    }
-    return map;
   }
 
   UserGoal copyWith({

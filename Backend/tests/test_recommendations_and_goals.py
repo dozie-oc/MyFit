@@ -178,6 +178,22 @@ def test_goal_partial_update_preserves_other_fields(client, auth_headers):
     assert res.json()["goal_type"] == "lose_weight"
 
 
+def test_goal_explicit_null_clears_persisted_field(client, auth_headers):
+    client.post(
+        "/goals",
+        json={"goal_type": "build_muscle", "foods_to_avoid": "salmon"},
+        headers=auth_headers,
+    )
+    client.post(
+        "/goals",
+        json={"goal_type": "build_muscle", "foods_to_avoid": None},
+        headers=auth_headers,
+    )
+    res = client.get("/goals", headers=auth_headers)
+    assert res.status_code == 200
+    assert res.json()["foods_to_avoid"] is None
+
+
 def test_summary_get_does_not_persist(client, session, auth_headers):
     """Regression: GET /summary/{date} must be read-only."""
     from sqlmodel import select
