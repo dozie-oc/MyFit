@@ -18,6 +18,12 @@ class AuthState extends ChangeNotifier {
   bool get hasGoal => _hasGoal;
   bool get checkingGoal => _checkingGoal;
 
+  AuthState() {
+    ApiClient.onUnauthorized = () {
+      if (_token != null) logout();
+    };
+  }
+
   Future<void> checkGoal() async {
     _checkingGoal = true;
     try {

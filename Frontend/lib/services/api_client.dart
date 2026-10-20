@@ -109,7 +109,18 @@ class ApiClient {
     return uri;
   }
 
-  static dynamic _decode(http.Response res) {
+  /// Invoked on a 401 from any non-login/register call.
+  static void Function()? onUnauthorized;
+
+  static const Duration _timeout = Duration(seconds: 15);
+
+  static dynamic _decode(http.Response res, [String path = '']) {
+    if (res.statusCode == 401 &&
+        path != '/auth/login' &&
+        path != '/auth/register' &&
+        path != '/auth/admin-login') {
+      onUnauthorized?.call();
+    }
     if (res.statusCode >= 200 && res.statusCode < 300) {
       if (res.body.isEmpty) return null;
       return jsonDecode(res.body);
@@ -142,27 +153,33 @@ class ApiClient {
 
   static Future<dynamic> get(String path,
       [Map<String, String>? params]) async {
-    final res = await http.get(_uri(path, params),
-        headers: await _authHeaders());
-    return _decode(res);
+    final res = await http
+        .get(_uri(path, params), headers: await _authHeaders())
+        .timeout(_timeout);
+    return _decode(res, path);
   }
 
   static Future<dynamic> post(String path, Map<String, dynamic> body) async {
-    final res = await http.post(_uri(path),
-        headers: await _authHeaders(), body: jsonEncode(body));
-    return _decode(res);
+    final res = await http
+        .post(_uri(path),
+            headers: await _authHeaders(), body: jsonEncode(body))
+        .timeout(_timeout);
+    return _decode(res, path);
   }
 
   static Future<dynamic> patch(String path, Map<String, dynamic> body) async {
-    final res = await http.patch(_uri(path),
-        headers: await _authHeaders(), body: jsonEncode(body));
-    return _decode(res);
+    final res = await http
+        .patch(_uri(path),
+            headers: await _authHeaders(), body: jsonEncode(body))
+        .timeout(_timeout);
+    return _decode(res, path);
   }
 
   static Future<void> delete(String path) async {
-    final res =
-        await http.delete(_uri(path), headers: await _authHeaders());
-    _decode(res);
+    final res = await http
+        .delete(_uri(path), headers: await _authHeaders())
+        .timeout(_timeout);
+    _decode(res, path);
   }
 
   // ─────────────────────────────────────
