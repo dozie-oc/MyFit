@@ -347,7 +347,7 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
   String _category = 'strength'; // 'strength', 'cardio', 'flexibility', 'other'
   String _intensity = 'moderate'; // 'low', 'moderate', 'high'
   int? _selectedCatalogId;
-  List<dynamic> _catalog = [];
+  List<ExerciseCatalogItem> _catalog = [];
 
   DateTime _date = DateTime.now();
   bool _saving = false;
@@ -419,14 +419,14 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
     });
   }
 
-  void _selectCatalogItem(Map<String, dynamic> item) {
-    final cat = (item['category'] as String?)?.toLowerCase() ?? 'cardio';
+  void _selectCatalogItem(ExerciseCatalogItem item) {
+    final cat = item.category.isEmpty ? 'cardio' : item.category;
     if (cat != _category) {
       _switchCategory(cat);
     }
     setState(() {
-      _selectedCatalogId = item['id'] as int;
-      _nameCtrl.text = item['name'] as String;
+      _selectedCatalogId = item.id;
+      _nameCtrl.text = item.name;
     });
   }
 
@@ -485,10 +485,8 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
     final isCardio = _category == 'cardio';
     final isFlexibility = _category == 'flexibility';
 
-    final filteredCatalog = _catalog.where((it) {
-      final cat = (it['category'] as String?)?.toLowerCase() ?? '';
-      return cat == _category;
-    }).toList();
+    final filteredCatalog =
+        _catalog.where((it) => it.category == _category).toList();
 
     return Padding(
       padding: EdgeInsets.only(
@@ -555,15 +553,14 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
                 spacing: 6,
                 runSpacing: 6,
                 children: filteredCatalog.take(8).map((catItem) {
-                  final isSelected = _nameCtrl.text == catItem['name'];
+                  final isSelected = _nameCtrl.text == catItem.name;
                   return ActionChip(
                     avatar: isSelected
                         ? const Icon(Icons.check, size: 14)
                         : null,
-                    label: Text(catItem['name'] as String,
+                    label: Text(catItem.name,
                         style: const TextStyle(fontSize: 12)),
-                    onPressed: () =>
-                        _selectCatalogItem(catItem as Map<String, dynamic>),
+                    onPressed: () => _selectCatalogItem(catItem),
                   );
                 }).toList(),
               ),
@@ -810,7 +807,7 @@ class _TrainingAdequacyBanner extends StatefulWidget {
 }
 
 class _TrainingAdequacyBannerState extends State<_TrainingAdequacyBanner> {
-  Future<Map<String, dynamic>>? _future;
+  Future<TrainingAdequacy>? _future;
   bool _expanded = false;
 
   @override
@@ -835,7 +832,7 @@ class _TrainingAdequacyBannerState extends State<_TrainingAdequacyBanner> {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Map<String, dynamic>>(
+    return FutureBuilder<TrainingAdequacy>(
       future: _future,
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting || snap.hasError || snap.data == null) {
@@ -843,13 +840,13 @@ class _TrainingAdequacyBannerState extends State<_TrainingAdequacyBanner> {
         }
 
         final data = snap.data!;
-        final summary = data['summary'] as String? ?? '';
-        final detail = data['detail'] as String? ?? '';
-        final sessionAction = data['session_action'] as String? ?? '';
-        final exercisesToday = data['exercises_today'] as int? ?? 0;
-        final totalSets = (data['total_sets_today'] as num?)?.toDouble() ?? 0;
-        final recommendedNext = (data['recommended_next'] as List?)?.cast<String>() ?? [];
-        final muscleGroups = (data['muscle_groups'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+        final summary = data.summary;
+        final detail = data.detail;
+        final sessionAction = data.sessionAction;
+        final exercisesToday = data.exercisesToday;
+        final totalSets = data.totalSetsToday;
+        final recommendedNext = data.recommendedNext;
+        final muscleGroups = data.muscleGroups;
 
         // Determine banner style based on session action
         Color bannerColor;
@@ -961,15 +958,11 @@ class _TrainingAdequacyBannerState extends State<_TrainingAdequacyBanner> {
                           spacing: 6,
                           runSpacing: 4,
                           children: muscleGroups
-                              .where((mg) {
-                                final sets = (mg['sets_completed'] as num?)?.toDouble() ?? 0;
-                                return sets > 0;
-                              })
+                              .where((mg) => mg.setsCompleted > 0)
                               .map((mg) {
-                                final name = (mg['muscle_group'] as String? ?? '')
-                                    .replaceAll('_', '/');
-                                final status = mg['status'] as String? ?? '';
-                                final sets = (mg['sets_completed'] as num?)?.toDouble() ?? 0;
+                                final name = mg.muscleGroup.replaceAll('_', '/');
+                                final status = mg.status;
+                                final sets = mg.setsCompleted;
 
                                 Color chipColor;
                                 switch (status) {

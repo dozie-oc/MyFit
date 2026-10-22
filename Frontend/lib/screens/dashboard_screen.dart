@@ -85,8 +85,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // Only fetch recommendation for today
       _isToday(_selectedDate)
           ? ApiClient.getTodayRecommendation()
-              .catchError((_) => <String, dynamic>{'has_recommendation': false, 'reason': ''})
-          : Future.value(<String, dynamic>{'has_recommendation': false, 'reason': ''}),
+              .catchError((_) => const Recommendation.none())
+          : Future.value(const Recommendation.none()),
     ]);
 
     DailySummary summary = const DailySummary.empty();
@@ -94,10 +94,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       summary = results[0] as DailySummary;
     }
 
-    Map<String, dynamic> recommendation = {};
-    if (results[5] is Map<String, dynamic>) {
-      recommendation = results[5] as Map<String, dynamic>;
-    }
+    final recommendation = results[5] as Recommendation;
 
     return _DashboardData(
       summary: summary,
@@ -298,14 +295,14 @@ class _DashboardData {
   final List<Exercise> exercises;
   final List<Habit> habits;
   final List<HabitActivityDay> activity;
-  final Map<String, dynamic> recommendation;
+  final Recommendation recommendation;
   const _DashboardData({
     required this.summary,
     required this.meals,
     required this.exercises,
     required this.habits,
     required this.activity,
-    this.recommendation = const {},
+    this.recommendation = const Recommendation.none(),
   });
 }
 
@@ -879,7 +876,7 @@ class _DashboardContent extends StatelessWidget {
         data.meals.isEmpty &&
         data.exercises.isEmpty;
     final rec = data.recommendation;
-    final hasRec = rec['has_recommendation'] == true;
+    final hasRec = rec.hasRecommendation;
 
     return Column(
       children: [
@@ -990,14 +987,16 @@ class _DashboardContent extends StatelessWidget {
 // ─────────────────────────────────────────
 
 class _RecommendationCard extends StatelessWidget {
-  final Map<String, dynamic> recommendation;
+  final Recommendation recommendation;
   const _RecommendationCard({required this.recommendation});
 
   @override
   Widget build(BuildContext context) {
-    final type = recommendation['type'] as String?;
-    final title = recommendation['title'] as String? ?? 'Today\'s recommendation';
-    final reason = recommendation['reason'] as String? ?? '';
+    final type = recommendation.type;
+    final title = recommendation.title.isEmpty
+        ? 'Today\'s recommendation'
+        : recommendation.title;
+    final reason = recommendation.reason;
 
     final isExercise = type == 'exercise';
     final accentColor = isExercise

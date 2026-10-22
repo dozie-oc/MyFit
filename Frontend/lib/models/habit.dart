@@ -18,8 +18,10 @@ class Habit {
   });
 
   factory Habit.fromJson(Map<String, dynamic> json) {
+    final id = (json['id'] as num?)?.toInt();
+    if (id == null) throw const FormatException('Habit.id is required');
     return Habit(
-      id: (json['id'] as num?)?.toInt() ?? 0,
+      id: id,
       name: json['name'] as String? ?? '',
       description: json['description'] as String?,
       frequency: json['frequency'] as String? ?? 'daily',

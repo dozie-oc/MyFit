@@ -34,8 +34,10 @@ class UserProfile {
   String get formattedBmi => bmi != null ? bmi!.toStringAsFixed(1) : '—';
 
   factory UserProfile.fromJson(Map<String, dynamic> json) {
+    final id = (json['id'] as num?)?.toInt();
+    if (id == null) throw const FormatException('UserProfile.id is required');
     return UserProfile(
-      id: (json['id'] as num?)?.toInt() ?? 0,
+      id: id,
       username: json['username'] as String? ?? '',
       weight: (json['weight'] as num?)?.toDouble(),
       height: (json['height'] as num?)?.toDouble(),

@@ -319,7 +319,7 @@ class _AddMealScreen extends StatefulWidget {
 class _AddMealScreenState extends State<_AddMealScreen> {
   DateTime _date = DateTime.now();
   String _mealType = 'breakfast';
-  final List<Map<String, dynamic>> _items = [];
+  final List<_DraftMealItem> _items = [];
   bool _saving = false;
 
   @override
@@ -351,7 +351,7 @@ class _AddMealScreenState extends State<_AddMealScreen> {
       '${_date.year}-${_date.month.toString().padLeft(2, '0')}-${_date.day.toString().padLeft(2, '0')}';
 
   Future<void> _addItem() async {
-    final item = await showModalBottomSheet<Map<String, dynamic>>(
+    final item = await showModalBottomSheet<_DraftMealItem>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -370,11 +370,11 @@ class _AddMealScreenState extends State<_AddMealScreen> {
     setState(() => _saving = true);
     try {
       final payloadItems = _items.map((it) {
-        return {
-          'food_id': it['food_id'],
-          'quantity': it['quantity'],
-          if (it['portion_id'] != null) 'portion_id': it['portion_id'],
-          if (it['unit'] != null) 'unit': it['unit'],
+        return <String, dynamic>{
+          'food_id': it.foodId,
+          'quantity': it.quantity,
+          if (it.portionId != null) 'portion_id': it.portionId,
+          if (it.unit != null) 'unit': it.unit,
         };
       }).toList();
 
@@ -462,11 +462,11 @@ class _AddMealScreenState extends State<_AddMealScreen> {
             ..._items.asMap().entries.map((e) {
               final i = e.key;
               final item = e.value;
-              final name = item['food_name'] ?? 'Food #${item['food_id']}';
-              final portionName = item['portion_name'];
+              final name = item.foodName;
+              final portionName = item.portionName;
               final subtitle = portionName != null
-                  ? '${item['quantity']}× $portionName'
-                  : '${item['quantity']}${item['unit'] ?? 'g'}';
+                  ? '${item.quantity}× $portionName'
+                  : '${item.quantity}${item.unit ?? 'g'}';
               return Card(
                 margin: const EdgeInsets.symmetric(vertical: 4),
                 child: ListTile(
@@ -493,6 +493,25 @@ class _AddMealScreenState extends State<_AddMealScreen> {
 // ─────────────────────────────────────────
 // ADD MEAL ITEM SHEET
 // ─────────────────────────────────────────
+
+/// A food line the user has added to a meal that hasn't been saved yet.
+class _DraftMealItem {
+  final int foodId;
+  final String foodName;
+  final double quantity;
+  final int? portionId;
+  final String? portionName;
+  final String? unit;
+
+  const _DraftMealItem({
+    required this.foodId,
+    required this.foodName,
+    required this.quantity,
+    this.portionId,
+    this.portionName,
+    this.unit,
+  });
+}
 
 class _AddMealItemSheet extends StatefulWidget {
   const _AddMealItemSheet();
@@ -532,18 +551,15 @@ class _AddMealItemSheetState extends State<_AddMealItemSheet> {
     final qty = double.tryParse(_qtyCtrl.text) ?? 0;
     if (qty <= 0) return;
 
-    final item = <String, dynamic>{
-      'food_id': _selected!.id,
-      'food_name': _selected!.name,
-      'quantity': qty,
-    };
-
-    if (_selectedPortion != null) {
-      item['portion_id'] = _selectedPortion!.id;
-      item['portion_name'] = _selectedPortion!.name;
-    } else {
-      item['unit'] = _unitCtrl.text.trim().toLowerCase();
-    }
+    final portion = _selectedPortion;
+    final item = _DraftMealItem(
+      foodId: _selected!.id,
+      foodName: _selected!.name,
+      quantity: qty,
+      portionId: portion?.id,
+      portionName: portion?.name,
+      unit: portion == null ? _unitCtrl.text.trim().toLowerCase() : null,
+    );
 
     Navigator.pop(context, item);
   }

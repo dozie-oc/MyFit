@@ -28,9 +28,13 @@ class MealItem {
   });
 
   factory MealItem.fromJson(Map<String, dynamic> json) {
+    final id = (json['id'] as num?)?.toInt();
+    if (id == null) throw const FormatException('MealItem.id is required');
+    final foodId = (json['food_id'] as num?)?.toInt();
+    if (foodId == null) throw const FormatException('MealItem.food_id is required');
     return MealItem(
-      id: (json['id'] as num?)?.toInt() ?? 0,
-      foodId: (json['food_id'] as num?)?.toInt() ?? 0,
+      id: id,
+      foodId: foodId,
       foodName: json['food_name'] as String? ?? '',
       portionId: (json['portion_id'] as num?)?.toInt(),
       portionName: json['portion_name'] as String?,
@@ -69,8 +73,10 @@ class Meal {
   });
 
   factory Meal.fromJson(Map<String, dynamic> json) {
+    final id = (json['id'] as num?)?.toInt();
+    if (id == null) throw const FormatException('Meal.id is required');
     return Meal(
-      id: (json['id'] as num?)?.toInt() ?? 0,
+      id: id,
       date: json['date'] as String? ?? '',
       mealType: json['meal_type'] as String? ?? 'snack',
       calories: (json['calories'] as num?)?.toDouble() ?? 0.0,

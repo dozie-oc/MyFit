@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../models/models.dart';
 import '../services/api_client.dart';
 
 // ─────────────────────────────────────────
@@ -35,7 +36,7 @@ class _RecommendationSheet extends StatefulWidget {
 
 class _RecommendationSheetState extends State<_RecommendationSheet> {
   late String? _selectedType;
-  late Future<Map<String, dynamic>> _future;
+  late Future<Recommendation> _future;
 
   @override
   void initState() {
@@ -158,7 +159,7 @@ class _RecommendationSheetState extends State<_RecommendationSheet> {
 
           // Content
           Expanded(
-            child: FutureBuilder<Map<String, dynamic>>(
+            child: FutureBuilder<Recommendation>(
               future: _future,
               builder: (ctx, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
@@ -278,7 +279,7 @@ class _ErrorContent extends StatelessWidget {
 }
 
 class _RecommendationContent extends StatelessWidget {
-  final Map<String, dynamic> data;
+  final Recommendation data;
   final String? filterType;
   final ScrollController scrollController;
   final VoidCallback onRefresh;
@@ -292,11 +293,11 @@ class _RecommendationContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasRec = data['has_recommendation'] as bool? ?? false;
-    final type = data['type'] as String?;
-    final title = data['title'] as String? ?? '';
-    final reason = data['reason'] as String? ?? '';
-    final items = (data['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final hasRec = data.hasRecommendation;
+    final type = data.type;
+    final title = data.title;
+    final reason = data.reason;
+    final items = data.items;
 
     final typeMatches = filterType == null || type == filterType;
 
@@ -399,15 +400,15 @@ class _RecommendationContent extends StatelessWidget {
   Future<void> _handleAdd(
     BuildContext context,
     String? type,
-    List<Map<String, dynamic>> items,
+    List<RecommendationItem> items,
   ) async {
     if (type == 'exercise' && items.isNotEmpty) {
       final item = items.first;
-      final name = item['name'] as String? ?? 'Exercise';
-      final category = item['category'] as String? ?? 'strength';
-      final sets = item['sets'] as int?;
-      final reps = item['reps'] as int?;
-      final duration = item['duration_minutes'] as int?;
+      final name = item.name.isEmpty ? 'Exercise' : item.name;
+      final category = item.category ?? 'strength';
+      final sets = item.sets;
+      final reps = item.reps;
+      final duration = item.durationMinutes;
 
       try {
         final today = DateTime.now();
@@ -442,39 +443,34 @@ class _RecommendationContent extends StatelessWidget {
         final dateStr =
             '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
 
-        List<dynamic> allFoods = [];
+        List<FoodItem>? allFoods;
         final payloadItems = <Map<String, dynamic>>[];
 
         for (final it in items) {
-          int? foodId = it['food_id'] as int?;
+          int? foodId = it.foodId;
           if (foodId == null) {
-            if (allFoods.isEmpty) {
-              allFoods = await ApiClient.getFoods();
-            }
-            final name = (it['name'] as String? ?? '').toLowerCase();
-            final match = allFoods.firstWhere(
-              (f) => (f['name'] as String? ?? '').toLowerCase() == name,
-              orElse: () => null,
-            );
-            if (match != null) {
-              foodId = match['id'] as int?;
+            allFoods ??= await ApiClient.getFoods();
+            final name = it.name.toLowerCase();
+            for (final f in allFoods) {
+              if (f.name.toLowerCase() == name) {
+                foodId = f.id;
+                break;
+              }
             }
           }
 
           if (foodId != null) {
-            final qty = (it['quantity'] as num?)?.toDouble() ??
-                (it['gram_weight'] as num?)?.toDouble() ??
-                100.0;
+            final qty = it.quantity ?? it.gramWeight ?? 100.0;
             payloadItems.add({
               'food_id': foodId,
               'quantity': qty,
-              'unit': (it['unit'] as String?) ?? 'g',
+              'unit': it.unit ?? 'g',
             });
           }
         }
 
         if (payloadItems.isNotEmpty) {
-          final mealType = (data['meal_type'] as String?) ?? 'snack';
+          final mealType = data.mealType ?? 'snack';
           await ApiClient.createMeal({
             'date': dateStr,
             'meal_type': mealType,
@@ -576,22 +572,22 @@ class _NoRecommendation extends StatelessWidget {
 }
 
 class _ItemCard extends StatelessWidget {
-  final Map<String, dynamic> item;
+  final RecommendationItem item;
   final String? type;
   const _ItemCard({required this.item, required this.type});
 
   @override
   Widget build(BuildContext context) {
-    final name = item['name'] as String? ?? '';
-    final cal = (item['calories'] as num?)?.toDouble();
-    final protein = (item['protein'] as num?)?.toDouble();
-    final carbs = (item['carbs'] as num?)?.toDouble();
-    final fat = (item['fat'] as num?)?.toDouble();
-    final sets = item['sets'] as int?;
-    final reps = item['reps'] as int?;
-    final duration = item['duration_minutes'] as int?;
-    final desc = item['description'] as String?;
-    final category = item['category'] as String?;
+    final name = item.name;
+    final cal = item.calories;
+    final protein = item.protein;
+    final carbs = item.carbs;
+    final fat = item.fat;
+    final sets = item.sets;
+    final reps = item.reps;
+    final duration = item.durationMinutes;
+    final desc = item.description;
+    final category = item.category;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),

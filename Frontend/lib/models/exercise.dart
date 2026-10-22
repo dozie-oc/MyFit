@@ -30,8 +30,10 @@ class Exercise {
   });
 
   factory Exercise.fromJson(Map<String, dynamic> json) {
+    final id = (json['id'] as num?)?.toInt();
+    if (id == null) throw const FormatException('Exercise.id is required');
     return Exercise(
-      id: (json['id'] as num?)?.toInt() ?? 0,
+      id: id,
       date: json['date'] as String? ?? '',
       name: json['name'] as String? ?? '',
       category: json['category'] as String? ?? 'other',

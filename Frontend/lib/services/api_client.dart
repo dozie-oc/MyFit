@@ -182,6 +182,15 @@ class ApiClient {
     _decode(res, path);
   }
 
+  /// Maps a decoded JSON list to typed models. Throws if [res] is not a list.
+  static List<T> _list<T>(
+      dynamic res, T Function(Map<String, dynamic>) fromJson) {
+    if (res is! List) {
+      throw ApiException(0, 'Unexpected response: expected a list');
+    }
+    return res.map((e) => fromJson(e as Map<String, dynamic>)).toList();
+  }
+
   // ─────────────────────────────────────
   // AUTH & MEASUREMENTS
   // ─────────────────────────────────────
@@ -248,12 +257,7 @@ class ApiClient {
     final params = <String, String>{};
     if (query != null && query.isNotEmpty) params['q'] = query;
     final res = await get('/foods${query != null ? '/search' : ''}', params);
-    if (res is List) {
-      return res
-          .map((e) => FoodItem.fromJson(e as Map<String, dynamic>))
-          .toList();
-    }
-    return const [];
+    return _list(res, FoodItem.fromJson);
   }
 
   static Future<FoodItem> getFood(int id) async {
@@ -284,17 +288,12 @@ class ApiClient {
     final params = <String, String>{};
     if (date != null) params['meal_date'] = date;
     final res = await get('/meals', params);
-    if (res is List) {
-      return res.map((e) => Meal.fromJson(e as Map<String, dynamic>)).toList();
-    }
-    return const [];
+    return _list(res, Meal.fromJson);
   }
 
-  static Future<Map<String, dynamic>> createMeal(
-      Map<String, dynamic> body) async {
-    final res = await post('/meals', body);
+  static Future<void> createMeal(Map<String, dynamic> body) async {
+    await post('/meals', body);
     notifyDataChanged({DataScope.meals});
-    return res;
   }
 
   static Future<void> deleteMeal(int id) async {
@@ -314,31 +313,26 @@ class ApiClient {
   // EXERCISES & CATALOG
   // ─────────────────────────────────────
 
-  static Future<List<dynamic>> getExerciseCatalog([String? category]) async {
+  static Future<List<ExerciseCatalogItem>> getExerciseCatalog(
+      [String? category]) async {
     final params = <String, String>{};
     if (category != null && category.isNotEmpty) {
       params['category'] = category;
     }
-    return await get('/exercises/catalog', params);
+    final res = await get('/exercises/catalog', params);
+    return _list(res, ExerciseCatalogItem.fromJson);
   }
 
   static Future<List<Exercise>> getExercises([String? date]) async {
     final params = <String, String>{};
     if (date != null) params['exercise_date'] = date;
     final res = await get('/exercises', params);
-    if (res is List) {
-      return res
-          .map((e) => Exercise.fromJson(e as Map<String, dynamic>))
-          .toList();
-    }
-    return const [];
+    return _list(res, Exercise.fromJson);
   }
 
-  static Future<Map<String, dynamic>> createExercise(
-      Map<String, dynamic> body) async {
-    final res = await post('/exercises', body);
+  static Future<void> createExercise(Map<String, dynamic> body) async {
+    await post('/exercises', body);
     notifyDataChanged({DataScope.exercises});
-    return res;
   }
 
   static Future<void> deleteExercise(int id) async {
@@ -350,8 +344,9 @@ class ApiClient {
   // WEIGHT
   // ─────────────────────────────────────
 
-  static Future<List<dynamic>> getWeightLogs() async {
-    return await get('/weight');
+  static Future<List<WeightLog>> getWeightLogs() async {
+    final res = await get('/weight');
+    return _list(res, WeightLog.fromJson);
   }
 
   static Future<Map<String, dynamic>> logWeight(
@@ -367,12 +362,7 @@ class ApiClient {
 
   static Future<List<Habit>> getHabits([int days = 35]) async {
     final res = await get('/habits', {'days': days.toString()});
-    if (res is List) {
-      return res
-          .map((e) => Habit.fromJson(e as Map<String, dynamic>))
-          .toList();
-    }
-    return const [];
+    return _list(res, Habit.fromJson);
   }
 
   static Future<Map<String, dynamic>> createHabit(
@@ -436,12 +426,7 @@ class ApiClient {
     if (dateFrom != null) params['date_from'] = dateFrom;
     if (dateTo != null) params['date_to'] = dateTo;
     final res = await get('/habits/activity', params);
-    if (res is List) {
-      return res
-          .map((e) => HabitActivityDay.fromJson(e as Map<String, dynamic>))
-          .toList();
-    }
-    return const [];
+    return _list(res, HabitActivityDay.fromJson);
   }
 
   // ─────────────────────────────────────
@@ -450,12 +435,7 @@ class ApiClient {
 
   static Future<List<DailySummary>> getAllSummaries() async {
     final res = await get('/summary');
-    if (res is List) {
-      return res
-          .map((e) => DailySummary.fromJson(e as Map<String, dynamic>))
-          .toList();
-    }
-    return const [];
+    return _list(res, DailySummary.fromJson);
   }
 
   static Future<DailySummary> getSummary(String date) async {
@@ -483,17 +463,19 @@ class ApiClient {
   // RECOMMENDATIONS
   // ─────────────────────────────────────────
 
-  static Future<Map<String, dynamic>> getTodayRecommendation([String? type]) async {
+  static Future<Recommendation> getTodayRecommendation([String? type]) async {
     final params = <String, String>{};
     if (type != null && type.isNotEmpty) params['type'] = type;
-    return await get('/recommendations/today', params);
+    final res = await get('/recommendations/today', params);
+    return Recommendation.fromJson(res as Map<String, dynamic>);
   }
 
   // ─────────────────────────────────────────
   // TRAINING ADEQUACY
   // ─────────────────────────────────────────
 
-  static Future<Map<String, dynamic>> getTrainingAdequacy() async {
-    return await get('/exercises/adequacy');
+  static Future<TrainingAdequacy> getTrainingAdequacy() async {
+    final res = await get('/exercises/adequacy');
+    return TrainingAdequacy.fromJson(res as Map<String, dynamic>);
   }
 }

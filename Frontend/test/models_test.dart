@@ -191,5 +191,22 @@ void main() {
       expect(exercise.weightKg, 80.0);
       expect(exercise.caloriesBurned, 120.0);
     });
+
+    test('missing required id throws FormatException', () {
+      expect(() => Exercise.fromJson({'name': 'Running'}),
+          throwsA(isA<FormatException>()));
+      expect(() => Meal.fromJson({'date': '2026-10-22'}),
+          throwsA(isA<FormatException>()));
+      expect(() => MealItem.fromJson({'food_id': 1}),
+          throwsA(isA<FormatException>()));
+      expect(() => FoodItem.fromJson({'name': 'Apple'}),
+          throwsA(isA<FormatException>()));
+      expect(() => Habit.fromJson({'name': 'Read'}),
+          throwsA(isA<FormatException>()));
+      expect(() => UserProfile.fromJson({'username': 'alex'}),
+          throwsA(isA<FormatException>()));
+      expect(() => WeightLog.fromJson({'weight': 75.0}),
+          throwsA(isA<FormatException>()));
+    });
   });
 }

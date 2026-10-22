@@ -68,7 +68,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     ]);
     return _ProfileData(
       user: results[0] as UserProfile,
-      weightLogs: results[1] as List<dynamic>,
+      weightLogs: results[1] as List<WeightLog>,
       summaries: results[2] as List<DailySummary>,
       goal: results[3] as UserGoal,
     );
@@ -139,7 +139,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
 class _ProfileData {
   final UserProfile user;
-  final List<dynamic> weightLogs;
+  final List<WeightLog> weightLogs;
   final List<DailySummary> summaries;
   final UserGoal goal;
   const _ProfileData(
@@ -179,11 +179,11 @@ class _ProfileContentState extends State<_ProfileContent> {
   @override
   Widget build(BuildContext context) {
     final user = widget.data.user;
-    final weightLogs = widget.data.weightLogs.cast<Map<String, dynamic>>();
+    final weightLogs = widget.data.weightLogs;
     final summaries = widget.data.summaries;
 
     final currentWeight = user.weight ??
-        (weightLogs.isNotEmpty ? (weightLogs.last['weight'] as num).toDouble() : 70.0);
+        (weightLogs.isNotEmpty ? weightLogs.last.weight : 70.0);
     final currentHeight = user.height ?? 175.0;
 
     final avgCaloriesIn = summaries.isNotEmpty
@@ -199,17 +199,17 @@ class _ProfileContentState extends State<_ProfileContent> {
         : 0.0;
 
     // Weight Stats
-    final sortedLogs = List<Map<String, dynamic>>.from(weightLogs)
-      ..sort((a, b) => (b['date'] as String).compareTo(a['date'] as String));
+    final sortedLogs = List<WeightLog>.from(weightLogs)
+      ..sort((a, b) => b.date.compareTo(a.date));
 
     double? minW;
     double? maxW;
     if (sortedLogs.isNotEmpty) {
       minW = sortedLogs
-          .map((l) => (l['weight'] as num).toDouble())
+          .map((l) => l.weight)
           .reduce((a, b) => a < b ? a : b);
       maxW = sortedLogs
-          .map((l) => (l['weight'] as num).toDouble())
+          .map((l) => l.weight)
           .reduce((a, b) => a > b ? a : b);
     }
 
@@ -392,17 +392,17 @@ class _ProfileContentState extends State<_ProfileContent> {
                 separatorBuilder: (ctx, idx) => const Divider(height: 1, indent: 16),
                 itemBuilder: (_, i) {
                   final log = sortedLogs[i];
-                  final w = (log['weight'] as num).toDouble();
+                  final w = log.weight;
                   final isFirst = i == 0;
                   double? delta;
                   if (i < sortedLogs.length - 1) {
-                    delta = w - (sortedLogs[i + 1]['weight'] as num).toDouble();
+                    delta = w - sortedLogs[i + 1].weight;
                   }
                   return ListTile(
                     dense: true,
                     title: Text('${w.toStringAsFixed(1)} kg',
                         style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-                    subtitle: Text(log['date'] as String, style: const TextStyle(fontSize: 12)),
+                    subtitle: Text(log.date, style: const TextStyle(fontSize: 12)),
                     trailing: delta == null
                         ? null
                         : Text(

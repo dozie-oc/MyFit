@@ -5,3 +5,6 @@ export 'habit.dart';
 export 'meal.dart';
 export 'exercise.dart';
 export 'food.dart';
+export 'recommendation.dart';
+export 'training.dart';
+export 'weight_log.dart';
