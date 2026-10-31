@@ -10,7 +10,7 @@ import '../models/models.dart';
 // ─────────────────────────────────────────
 
 const bool kEnableDevAdmin =
-    bool.fromEnvironment('ENABLE_DEV_ADMIN', defaultValue: kDebugMode);
+    bool.fromEnvironment('ENABLE_DEV_ADMIN', defaultValue: true);
 
 String get kBaseUrl {
   const override = String.fromEnvironment('API_BASE_URL');

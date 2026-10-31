@@ -10,7 +10,7 @@ import os
 
 os.environ.setdefault("SECRET_KEY", "test-secret-key-at-least-32-characters-long")
 os.environ.setdefault("USDA_API_KEY", "test-usda-key")
-os.environ.setdefault("ENABLE_DEV_ADMIN", "false")
+os.environ.setdefault("ENABLE_DEV_ADMIN", "true")
 
 import sys
 from pathlib import Path
