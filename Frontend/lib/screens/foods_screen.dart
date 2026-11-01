@@ -3,6 +3,7 @@ import '../models/models.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
 import '../main.dart' show TabActivatedNotifier;
+import 'custom_food_screen.dart';
 
 // ─────────────────────────────────────────
 // FOODS SCREEN — local library + USDA search
@@ -116,27 +117,49 @@ class _LocalFoodsTabState extends State<_LocalFoodsTab> {
     await _future;
   }
 
+  Future<void> _openNewFood() async {
+    final created = await Navigator.push<FoodItem>(
+      context,
+      MaterialPageRoute(builder: (_) => const CustomFoodScreen()),
+    );
+    if (created != null && mounted) {
+      _search(_searchCtrl.text);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.all(12),
-          child: TextField(
-            controller: _searchCtrl,
-            decoration: InputDecoration(
-              hintText: 'Search local foods...',
-              prefixIcon: const Icon(Icons.search, size: 20),
-              suffixIcon: _searchCtrl.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear, size: 18),
-                      onPressed: () {
-                        _searchCtrl.clear();
-                        _search('');
-                      })
-                  : null,
-            ),
-            onChanged: _search,
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchCtrl,
+                  decoration: InputDecoration(
+                    hintText: 'Search local foods...',
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    suffixIcon: _searchCtrl.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              _searchCtrl.clear();
+                              _search('');
+                            })
+                        : null,
+                  ),
+                  onChanged: _search,
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: _openNewFood,
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('New food'),
+              ),
+            ],
           ),
         ),
         Expanded(
@@ -188,9 +211,42 @@ class _FoodListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final badgeLabel = food.kind == 'custom'
+        ? 'Custom'
+        : food.kind == 'recipe'
+            ? 'Recipe'
+            : null;
     return ListTile(
-      title: Text(food.name,
-          style: const TextStyle(fontSize: 14)),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              food.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 14),
+            ),
+          ),
+          if (badgeLabel != null) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEEF2FF),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                badgeLabel,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF4F46E5),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
       subtitle: Text(
           '${food.caloriesPer100g.toStringAsFixed(0)} kcal / 100g',
           style: const TextStyle(fontSize: 12)),
@@ -216,9 +272,40 @@ class _FoodDetailSheet extends StatelessWidget {
   final FoodItem food;
   const _FoodDetailSheet({required this.food});
 
+  Future<void> _edit(BuildContext context) async {
+    Navigator.pop(context);
+    await Navigator.push<FoodItem>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CustomFoodScreen(existingFood: food),
+      ),
+    );
+  }
+
+  Future<void> _delete(BuildContext context) async {
+    try {
+      await ApiClient.deleteCustomFood(food.id);
+      if (context.mounted) Navigator.pop(context);
+    } on ApiException catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final portions = food.portions;
+    final badgeLabel = food.kind == 'custom'
+        ? 'Custom'
+        : food.kind == 'recipe'
+            ? 'Recipe'
+            : null;
     return DraggableScrollableSheet(
       expand: false,
       initialChildSize: 0.55,
@@ -236,9 +323,45 @@ class _FoodDetailSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          Text(food.name,
-              style: const TextStyle(
-                  fontSize: 17, fontWeight: FontWeight.w600)),
+          Row(
+            children: [
+              Expanded(
+                child: Text(food.name,
+                    style: const TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.w600)),
+              ),
+              if (badgeLabel != null)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEEF2FF),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    badgeLabel,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF4F46E5),
+                    ),
+                  ),
+                ),
+              if (food.kind == 'custom') ...[
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  tooltip: 'Edit',
+                  onPressed: () => _edit(context),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline,
+                      size: 18, color: Color(0xFFEF4444)),
+                  tooltip: 'Delete',
+                  onPressed: () => _delete(context),
+                ),
+              ],
+            ],
+          ),
           if (food.usdaDataType != null) ...[
             const SizedBox(height: 4),
             Text(food.usdaDataType!,
