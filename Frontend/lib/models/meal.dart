@@ -2,6 +2,7 @@ class MealItem {
   final int id;
   final int foodId;
   final String foodName;
+  final String foodKind;
   final int? portionId;
   final String? portionName;
   final double quantity;
@@ -16,6 +17,7 @@ class MealItem {
     required this.id,
     required this.foodId,
     this.foodName = '',
+    this.foodKind = 'catalog',
     this.portionId,
     this.portionName,
     required this.quantity,
@@ -36,6 +38,7 @@ class MealItem {
       id: id,
       foodId: foodId,
       foodName: json['food_name'] as String? ?? '',
+      foodKind: json['food_kind'] as String? ?? 'catalog',
       portionId: (json['portion_id'] as num?)?.toInt(),
       portionName: json['portion_name'] as String?,
       quantity: (json['quantity'] as num?)?.toDouble() ?? 0.0,

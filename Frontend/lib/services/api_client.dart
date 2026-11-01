@@ -280,6 +280,44 @@ class ApiClient {
     return res;
   }
 
+  static Future<FoodItem> createCustomFood(CustomFoodInput input) async {
+    final res = await post('/foods/custom', input.toJson());
+    notifyDataChanged({DataScope.foods});
+    return FoodItem.fromJson(res as Map<String, dynamic>);
+  }
+
+  static Future<FoodItem> updateCustomFood(
+      int id, CustomFoodInput input) async {
+    final res = await patch('/foods/custom/$id', input.toJson());
+    notifyDataChanged({DataScope.foods});
+    return FoodItem.fromJson(res as Map<String, dynamic>);
+  }
+
+  static Future<void> deleteCustomFood(int id) async {
+    await delete('/foods/custom/$id');
+    notifyDataChanged({DataScope.foods});
+  }
+
+  static Future<FoodPortion> addPortion(
+    int foodId,
+    String name,
+    double grams, {
+    double quantity = 1,
+  }) async {
+    final res = await post('/foods/$foodId/portions', {
+      'name': name,
+      'grams': grams,
+      'quantity': quantity,
+    });
+    notifyDataChanged({DataScope.foods});
+    return FoodPortion.fromJson(res as Map<String, dynamic>);
+  }
+
+  static Future<void> deletePortion(int portionId) async {
+    await delete('/foods/portions/$portionId');
+    notifyDataChanged({DataScope.foods});
+  }
+
   // ─────────────────────────────────────
   // MEALS
   // ─────────────────────────────────────
@@ -294,6 +332,28 @@ class ApiClient {
   static Future<void> createMeal(Map<String, dynamic> body) async {
     await post('/meals', body);
     notifyDataChanged({DataScope.meals});
+  }
+
+  static Future<Meal> quickAddMeal({
+    required String date,
+    String mealType = 'snack',
+    required String name,
+    required double calories,
+    double protein = 0,
+    double carbs = 0,
+    double fat = 0,
+  }) async {
+    final res = await post('/meals/quick', {
+      'date': date,
+      'meal_type': mealType,
+      'name': name,
+      'calories': calories,
+      'protein': protein,
+      'carbs': carbs,
+      'fat': fat,
+    });
+    notifyDataChanged({DataScope.meals});
+    return Meal.fromJson(res as Map<String, dynamic>);
   }
 
   static Future<void> deleteMeal(int id) async {

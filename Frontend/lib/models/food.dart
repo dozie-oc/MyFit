@@ -39,6 +39,7 @@ class FoodItem {
   final double carbsPer100g;
   final double fatPer100g;
   final String baseUnit;
+  final String kind;
   final List<FoodPortion> portions;
 
   const FoodItem({
@@ -51,6 +52,7 @@ class FoodItem {
     required this.carbsPer100g,
     required this.fatPer100g,
     this.baseUnit = 'g',
+    this.kind = 'catalog',
     this.portions = const [],
   });
 
@@ -67,10 +69,44 @@ class FoodItem {
       carbsPer100g: (json['carbs_per_100g'] as num?)?.toDouble() ?? 0.0,
       fatPer100g: (json['fat_per_100g'] as num?)?.toDouble() ?? 0.0,
       baseUnit: json['base_unit'] as String? ?? 'g',
+      kind: json['kind'] as String? ?? 'catalog',
       portions: (json['portions'] as List<dynamic>?)
               ?.map((e) => FoodPortion.fromJson(e as Map<String, dynamic>))
               .toList() ??
           const [],
     );
   }
+}
+
+class CustomFoodInput {
+  final String name;
+  final String basis; // 'serving' | 'per_100g'
+  final double servingGrams;
+  final String servingName;
+  final double calories;
+  final double protein;
+  final double carbs;
+  final double fat;
+
+  const CustomFoodInput({
+    required this.name,
+    this.basis = 'serving',
+    this.servingGrams = 100.0,
+    this.servingName = 'serving',
+    required this.calories,
+    this.protein = 0.0,
+    this.carbs = 0.0,
+    this.fat = 0.0,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'basis': basis,
+        'serving_grams': servingGrams,
+        'serving_name': servingName,
+        'calories': calories,
+        'protein': protein,
+        'carbs': carbs,
+        'fat': fat,
+      };
 }

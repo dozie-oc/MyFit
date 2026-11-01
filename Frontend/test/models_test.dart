@@ -171,7 +171,67 @@ void main() {
       expect(meal.mealType, 'lunch');
       expect(meal.items.length, 1);
       expect(meal.items[0].foodName, 'Chicken Breast');
+      expect(meal.items[0].foodKind, 'catalog');
       expect(meal.items[0].protein, 62.0);
+    });
+
+    test('FoodItem kind, CustomFoodInput toJson, and MealItem foodKind', () {
+      final food = FoodItem.fromJson({
+        'id': 7,
+        'name': 'Homemade Stew',
+        'kind': 'custom',
+        'calories_per_100g': 150,
+        'protein_per_100g': 10,
+        'carbs_per_100g': 12,
+        'fat_per_100g': 6,
+      });
+      expect(food.kind, 'custom');
+
+      final defaultKindFood = FoodItem.fromJson({
+        'id': 8,
+        'name': 'Apple',
+        'calories_per_100g': 52,
+        'protein_per_100g': 0.3,
+        'carbs_per_100g': 14,
+        'fat_per_100g': 0.2,
+      });
+      expect(defaultKindFood.kind, 'catalog');
+
+      const input = CustomFoodInput(
+        name: 'Oats',
+        basis: 'serving',
+        servingGrams: 50,
+        servingName: 'bowl',
+        calories: 185,
+        protein: 6.5,
+        carbs: 33,
+        fat: 3.2,
+      );
+      expect(input.toJson(), {
+        'name': 'Oats',
+        'basis': 'serving',
+        'serving_grams': 50.0,
+        'serving_name': 'bowl',
+        'calories': 185.0,
+        'protein': 6.5,
+        'carbs': 33.0,
+        'fat': 3.2,
+      });
+
+      final quickItem = MealItem.fromJson({
+        'id': 1,
+        'food_id': 9,
+        'food_name': 'Lunch estimate',
+        'food_kind': 'quick',
+        'quantity': 1,
+        'unit': 'entry',
+        'gram_weight': 100,
+        'calories': 700,
+        'protein': 0,
+        'carbs': 0,
+        'fat': 0,
+      });
+      expect(quickItem.foodKind, 'quick');
     });
 
     test('Exercise fromJson handles numeric types', () {
