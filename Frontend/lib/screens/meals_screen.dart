@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
+import 'custom_food_screen.dart';
 import 'recommendation_sheet.dart';
 import '../main.dart' show TabActivatedNotifier;
 
@@ -136,9 +137,12 @@ class _MealCard extends StatelessWidget {
     String itemSummary = '';
     if (items.isNotEmpty) {
       final names = items.map((it) {
+        final prefix = it.foodKind == 'quick' ? '≈ ' : '';
         final name = it.foodName;
         final gram = it.gramWeight > 0 ? it.gramWeight.toStringAsFixed(0) : '';
-        return name.isNotEmpty ? (gram.isNotEmpty ? '$name (${gram}g)' : name) : 'Food #${it.foodId}';
+        if (name.isEmpty) return 'Food #${it.foodId}';
+        if (it.foodKind == 'quick') return '$prefix$name';
+        return gram.isNotEmpty ? '$prefix$name (${gram}g)' : '$prefix$name';
       }).toList();
       itemSummary = names.join(', ');
     } else {
@@ -281,13 +285,16 @@ class _MealDetailSheet extends StatelessWidget {
           const SizedBox(height: 8),
           ...items.map((item) {
             final cal = item.calories;
+            final prefix = item.foodKind == 'quick' ? '≈ ' : '';
             final foodName = item.foodName.isNotEmpty ? item.foodName : 'Food #${item.foodId}';
             final portionName = item.portionName;
             final gramWeight = item.gramWeight > 0 ? item.gramWeight.toStringAsFixed(0) : '?';
-            
-            final labelText = portionName != null && portionName.isNotEmpty
-                ? '$foodName ($portionName · ${gramWeight}g)'
-                : '$foodName (${gramWeight}g)';
+
+            final labelText = item.foodKind == 'quick'
+                ? '$prefix$foodName'
+                : (portionName != null && portionName.isNotEmpty
+                    ? '$prefix$foodName ($portionName · ${gramWeight}g)'
+                    : '$prefix$foodName (${gramWeight}g)');
 
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
@@ -359,6 +366,122 @@ class _AddMealScreenState extends State<_AddMealScreen> {
       builder: (_) => const _AddMealItemSheet(),
     );
     if (item != null) setState(() => _items.add(item));
+  }
+
+  Future<void> _showQuickAddDialog() async {
+    final nameCtrl = TextEditingController();
+    final calCtrl = TextEditingController();
+    final proCtrl = TextEditingController();
+    final carbCtrl = TextEditingController();
+    final fatCtrl = TextEditingController();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Quick add (estimate)'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'What did you eat?',
+                  hintText: 'e.g. Lunch plate',
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: calCtrl,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'About how many calories (kcal)? *',
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: proCtrl,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Protein (g)'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: carbCtrl,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Carbs (g)'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: fatCtrl,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Fat (g)'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Log estimate'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    final name = nameCtrl.text.trim();
+    final cal = double.tryParse(calCtrl.text.trim());
+    if (name.isEmpty || cal == null || cal < 0) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter a name and calories.')),
+        );
+      }
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      await ApiClient.quickAddMeal(
+        date: _dateStr,
+        mealType: _mealType,
+        name: name,
+        calories: cal,
+        protein: double.tryParse(proCtrl.text.trim()) ?? 0,
+        carbs: double.tryParse(carbCtrl.text.trim()) ?? 0,
+        fat: double.tryParse(fatCtrl.text.trim()) ?? 0,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   Future<void> _save() async {
@@ -444,6 +567,11 @@ class _AddMealScreenState extends State<_AddMealScreen> {
                   style: TextStyle(
                       fontWeight: FontWeight.w600, fontSize: 15)),
               const Spacer(),
+              TextButton.icon(
+                onPressed: _saving ? null : _showQuickAddDialog,
+                icon: const Icon(Icons.bolt, size: 16),
+                label: const Text('Quick add'),
+              ),
               TextButton.icon(
                 onPressed: _addItem,
                 icon: const Icon(Icons.add, size: 16),
@@ -546,9 +674,105 @@ class _AddMealItemSheetState extends State<_AddMealItemSheet> {
     super.dispose();
   }
 
+  Future<void> _openCreateCustomFood() async {
+    final created = await Navigator.push<FoodItem>(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            CustomFoodScreen(initialName: _searchCtrl.text.trim()),
+      ),
+    );
+    if (created != null && mounted) {
+      setState(() {
+        _foods = [created, ...(_foods ?? const [])];
+        _selected = created;
+        _selectedPortion =
+            created.portions.isNotEmpty ? created.portions.first : null;
+        _qtyCtrl.text = _selectedPortion != null ? '1' : '100';
+      });
+    }
+  }
+
+  Future<void> _addPersonalPortion() async {
+    if (_selected == null) return;
+    final nameCtrl = TextEditingController();
+    final gramsCtrl = TextEditingController();
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('My portion'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Portion name',
+                hintText: 'e.g. my plate of rice',
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: gramsCtrl,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Weight (g)',
+                hintText: 'e.g. 240',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true || !mounted) return;
+    final name = nameCtrl.text.trim();
+    final grams = double.tryParse(gramsCtrl.text.trim());
+    if (name.isEmpty || grams == null || grams <= 0) return;
+
+    try {
+      final createdPortion =
+          await ApiClient.addPortion(_selected!.id, name, grams);
+      final refreshed = await ApiClient.getFood(_selected!.id);
+      if (!mounted) return;
+      setState(() {
+        _selected = refreshed;
+        _foods = _foods
+            ?.map((f) => f.id == refreshed.id ? refreshed : f)
+            .toList();
+        _selectedPortion = refreshed.portions.firstWhere(
+          (p) => p.id == createdPortion.id,
+          orElse: () => createdPortion,
+        );
+        _qtyCtrl.text = '1';
+      });
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+      }
+    }
+  }
+
   void _confirm() {
     if (_selected == null) return;
-    final qty = double.tryParse(_qtyCtrl.text) ?? 0;
+    final qty = double.tryParse(_qtyCtrl.text.trim()) ?? 0;
     if (qty <= 0) return;
 
     final portion = _selectedPortion;
@@ -625,19 +849,39 @@ class _AddMealItemSheetState extends State<_AddMealItemSheet> {
                 ),
                 child: ListView.builder(
                   shrinkWrap: true,
-                  itemCount: _foods!.length,
+                  itemCount: _foods!.length + 1,
                   itemBuilder: (_, i) {
+                    if (i == _foods!.length) {
+                      return ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.add_circle_outline,
+                            size: 18, color: Color(0xFF2563EB)),
+                        title: const Text(
+                          "Can't find it? Create a custom food",
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF2563EB),
+                          ),
+                        ),
+                        onTap: _openCreateCustomFood,
+                      );
+                    }
                     final f = _foods![i];
-                    final isSelected =
-                        _selected?.id == f.id;
+                    final isSelected = _selected?.id == f.id;
                     return ListTile(
                       dense: true,
                       selected: isSelected,
                       title: Text(f.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 13)),
                       onTap: () => setState(() {
                         _selected = f;
-                        _selectedPortion = null;
+                        _selectedPortion =
+                            f.portions.isNotEmpty ? f.portions.first : null;
+                        _qtyCtrl.text =
+                            _selectedPortion != null ? '1' : '100';
                       }),
                       trailing: isSelected
                           ? const Icon(Icons.check,
@@ -655,34 +899,42 @@ class _AddMealItemSheetState extends State<_AddMealItemSheet> {
                   style: const TextStyle(
                        fontWeight: FontWeight.w600, fontSize: 13)),
               const SizedBox(height: 12),
-              if (portions.isNotEmpty) ...[
-                const Text('Choose a serving size',
-                    style: TextStyle(
-                        fontSize: 12, color: Color(0xFF9CA3AF))),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    ChoiceChip(
-                      label: const Text('Custom grams'),
-                      selected: _selectedPortion == null,
-                      onSelected: (_) =>
-                          setState(() => _selectedPortion = null),
-                    ),
-                    ...portions.map((p) {
-                      final isSelected =
-                          _selectedPortion?.id == p.id;
-                      return ChoiceChip(
-                        label: Text('${p.name} (${p.gramWeight.toStringAsFixed(0)}g)'),
-                        selected: isSelected,
-                        onSelected: (_) =>
-                            setState(() => _selectedPortion = p),
-                      );
+              const Text('Choose a serving size',
+                  style: TextStyle(
+                      fontSize: 12, color: Color(0xFF9CA3AF))),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  ChoiceChip(
+                    label: const Text('Custom grams'),
+                    selected: _selectedPortion == null,
+                    onSelected: (_) => setState(() {
+                      _selectedPortion = null;
+                      _qtyCtrl.text = '100';
                     }),
-                  ],
-                ),
-                const SizedBox(height: 12),
-              ],
+                  ),
+                  ...portions.map((p) {
+                    final isSelected = _selectedPortion?.id == p.id;
+                    return ChoiceChip(
+                      label: Text(
+                          '${p.name} (${p.gramWeight.toStringAsFixed(0)}g)'),
+                      selected: isSelected,
+                      onSelected: (_) => setState(() {
+                        if (_selectedPortion == null) _qtyCtrl.text = '1';
+                        _selectedPortion = p;
+                      }),
+                    );
+                  }),
+                  ActionChip(
+                    avatar: const Icon(Icons.add, size: 14),
+                    label: const Text('My portion...'),
+                    onPressed: _addPersonalPortion,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
               Row(
                 children: [
                   Expanded(
