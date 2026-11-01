@@ -175,6 +175,14 @@ class ApiClient {
     return _decode(res, path);
   }
 
+  static Future<dynamic> put(String path, Map<String, dynamic> body) async {
+    final res = await http
+        .put(_uri(path),
+            headers: await _authHeaders(), body: jsonEncode(body))
+        .timeout(_timeout);
+    return _decode(res, path);
+  }
+
   static Future<void> delete(String path) async {
     final res = await http
         .delete(_uri(path), headers: await _authHeaders())
@@ -316,6 +324,23 @@ class ApiClient {
   static Future<void> deletePortion(int portionId) async {
     await delete('/foods/portions/$portionId');
     notifyDataChanged({DataScope.foods});
+  }
+
+  static Future<Recipe> createRecipe(RecipeInput input) async {
+    final res = await post('/recipes', input.toJson());
+    notifyDataChanged({DataScope.foods});
+    return Recipe.fromJson(res as Map<String, dynamic>);
+  }
+
+  static Future<Recipe> getRecipe(int foodId) async {
+    final res = await get('/recipes/$foodId');
+    return Recipe.fromJson(res as Map<String, dynamic>);
+  }
+
+  static Future<Recipe> updateRecipe(int foodId, RecipeInput input) async {
+    final res = await put('/recipes/$foodId', input.toJson());
+    notifyDataChanged({DataScope.foods});
+    return Recipe.fromJson(res as Map<String, dynamic>);
   }
 
   // ─────────────────────────────────────

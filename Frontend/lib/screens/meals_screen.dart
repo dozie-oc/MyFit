@@ -358,14 +358,25 @@ class _AddMealScreenState extends State<_AddMealScreen> {
       '${_date.year}-${_date.month.toString().padLeft(2, '0')}-${_date.day.toString().padLeft(2, '0')}';
 
   Future<void> _addItem() async {
-    final item = await showModalBottomSheet<_DraftMealItem>(
+    final picked = await showModalBottomSheet<PickedFoodItem>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => const _AddMealItemSheet(),
+      builder: (_) => const FoodPickerSheet(),
     );
-    if (item != null) setState(() => _items.add(item));
+    if (picked != null) {
+      setState(() {
+        _items.add(_DraftMealItem(
+          foodId: picked.food.id,
+          foodName: picked.food.name,
+          quantity: picked.quantity,
+          portionId: picked.portionId,
+          portionName: picked.portionName,
+          unit: picked.unit,
+        ));
+      });
+    }
   }
 
   Future<void> _showQuickAddDialog() async {

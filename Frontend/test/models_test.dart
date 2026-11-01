@@ -268,5 +268,78 @@ void main() {
       expect(() => WeightLog.fromJson({'weight': 75.0}),
           throwsA(isA<FormatException>()));
     });
+
+    test('Recipe preview math and cooking fat regex', () {
+      final preview = computeRecipePreview(
+        ingredients: const [
+          DraftRecipeIngredient(
+            foodId: 1,
+            foodName: 'White Rice',
+            quantity: 300,
+            unit: 'g',
+            gramWeight: 300,
+            calories: 300,
+            protein: 6,
+            carbs: 66,
+            fat: 1,
+          ),
+          DraftRecipeIngredient(
+            foodId: 2,
+            foodName: 'Chicken Breast',
+            quantity: 100,
+            unit: 'g',
+            gramWeight: 100,
+            calories: 200,
+            protein: 30,
+            carbs: 0,
+            fat: 8,
+          ),
+        ],
+        servings: 4,
+      );
+
+      expect(preview.totalGrams, 400);
+      expect(preview.totalCalories, 500);
+      expect(preview.portionGrams, 100);
+      expect(preview.caloriesPerPortion, 125);
+      expect(preview.caloriesPer100g, 125);
+
+      final cookedPreview = computeRecipePreview(
+        ingredients: const [
+          DraftRecipeIngredient(
+            foodId: 1,
+            foodName: 'White Rice',
+            quantity: 300,
+            unit: 'g',
+            gramWeight: 300,
+            calories: 300,
+            protein: 6,
+            carbs: 66,
+            fat: 1,
+          ),
+          DraftRecipeIngredient(
+            foodId: 2,
+            foodName: 'Chicken Breast',
+            quantity: 100,
+            unit: 'g',
+            gramWeight: 100,
+            calories: 200,
+            protein: 30,
+            carbs: 0,
+            fat: 8,
+          ),
+        ],
+        servings: 4,
+        cookedWeightG: 500,
+      );
+      expect(cookedPreview.portionGrams, 125);
+      expect(cookedPreview.caloriesPerPortion, 125);
+      expect(cookedPreview.caloriesPer100g, 100);
+
+      expect(hasCookingFat(['White Rice', 'Tomato']), isFalse);
+      expect(hasCookingFat(['Boiled potato']), isFalse);
+      expect(hasCookingFat(['Palm Oil', 'Rice']), isTrue);
+      expect(hasCookingFat(['Unsalted butter']), isTrue);
+    });
   });
 }

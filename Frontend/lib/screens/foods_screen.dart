@@ -4,6 +4,7 @@ import '../services/api_client.dart';
 import '../theme.dart';
 import '../main.dart' show TabActivatedNotifier;
 import 'custom_food_screen.dart';
+import 'recipe_builder_screen.dart';
 
 // ─────────────────────────────────────────
 // FOODS SCREEN — local library + USDA search
@@ -127,6 +128,16 @@ class _LocalFoodsTabState extends State<_LocalFoodsTab> {
     }
   }
 
+  Future<void> _openNewRecipe() async {
+    final created = await Navigator.push<FoodItem>(
+      context,
+      MaterialPageRoute(builder: (_) => const RecipeBuilderScreen()),
+    );
+    if (created != null && mounted) {
+      _search(_searchCtrl.text);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -158,6 +169,12 @@ class _LocalFoodsTabState extends State<_LocalFoodsTab> {
                 onPressed: _openNewFood,
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('New food'),
+              ),
+              const SizedBox(width: 6),
+              OutlinedButton.icon(
+                onPressed: _openNewRecipe,
+                icon: const Icon(Icons.soup_kitchen_outlined, size: 16),
+                label: const Text('New recipe'),
               ),
             ],
           ),
@@ -274,12 +291,21 @@ class _FoodDetailSheet extends StatelessWidget {
 
   Future<void> _edit(BuildContext context) async {
     Navigator.pop(context);
-    await Navigator.push<FoodItem>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CustomFoodScreen(existingFood: food),
-      ),
-    );
+    if (food.kind == 'recipe') {
+      await Navigator.push<FoodItem>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => RecipeBuilderScreen(existingFoodId: food.id),
+        ),
+      );
+    } else {
+      await Navigator.push<FoodItem>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CustomFoodScreen(existingFood: food),
+        ),
+      );
+    }
   }
 
   Future<void> _delete(BuildContext context) async {
@@ -347,7 +373,7 @@ class _FoodDetailSheet extends StatelessWidget {
                     ),
                   ),
                 ),
-              if (food.kind == 'custom') ...[
+              if (food.kind == 'custom' || food.kind == 'recipe') ...[
                 IconButton(
                   icon: const Icon(Icons.edit_outlined, size: 18),
                   tooltip: 'Edit',
