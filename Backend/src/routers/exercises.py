@@ -4,10 +4,11 @@ from fastapi import APIRouter, HTTPException, status
 from sqlmodel import Session, select, or_
 
 from src.dependencies import CurrentUserDep, SessionDep
-from src.models import Exercise, ExerciseCatalogItem, UserGoal
+from src.models import Exercise, ExerciseCatalogItem, ExerciseMuscleMapping, UserGoal
 from src.schemas import (
     ExerciseCatalogItemOut,
     ExerciseLogCreate,
+    ExerciseMuscleMappingOut,
     ExerciseOut,
     TrainingAdequacyResponse,
     MuscleGroupStatus,
@@ -119,7 +120,28 @@ def get_exercise_catalog(
         query = query.where(ExerciseCatalogItem.category == category.lower())
 
     query = query.order_by(ExerciseCatalogItem.category, ExerciseCatalogItem.name)
-    return session.exec(query).all()
+    items = session.exec(query).all()
+    if not items:
+        return []
+
+    item_ids = [item.id for item in items if item.id is not None]
+    mappings = session.exec(
+        select(ExerciseMuscleMapping).where(
+            ExerciseMuscleMapping.exercise_catalog_id.in_(item_ids)
+        )
+    ).all()
+    muscles_by_item: dict[int, list[ExerciseMuscleMappingOut]] = {}
+    for m in mappings:
+        muscles_by_item.setdefault(m.exercise_catalog_id, []).append(
+            ExerciseMuscleMappingOut.model_validate(m)
+        )
+
+    out: list[ExerciseCatalogItemOut] = []
+    for item in items:
+        dto = ExerciseCatalogItemOut.model_validate(item)
+        dto.muscles = muscles_by_item.get(item.id, [])
+        out.append(dto)
+    return out
 
 
 @router.get(

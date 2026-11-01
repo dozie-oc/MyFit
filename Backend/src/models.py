@@ -481,6 +481,16 @@ class ExerciseCatalogItem(SQLModel, table=True):
         max_length=500,
     )
 
+    equipment: str = Field(
+        default="bodyweight",
+        max_length=60,
+    )
+
+    level: str = Field(
+        default="intermediate",
+        max_length=15,
+    )
+
     is_custom: bool = Field(
         default=False,
     )

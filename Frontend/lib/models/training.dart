@@ -1,19 +1,56 @@
+class ExerciseMuscle {
+  final String muscleGroup;
+  final String role;
+
+  const ExerciseMuscle({
+    required this.muscleGroup,
+    required this.role,
+  });
+
+  factory ExerciseMuscle.fromJson(Map<String, dynamic> json) {
+    return ExerciseMuscle(
+      muscleGroup: json['muscle_group'] as String? ?? '',
+      role: json['role'] as String? ?? 'primary',
+    );
+  }
+}
+
 class ExerciseCatalogItem {
   final int id;
   final String name;
   final String category;
+  final String equipment;
+  final String level;
+  final bool isCustom;
+  final double defaultMet;
+  final List<ExerciseMuscle> muscles;
 
   const ExerciseCatalogItem({
     required this.id,
     required this.name,
     required this.category,
+    this.equipment = 'bodyweight',
+    this.level = 'intermediate',
+    this.isCustom = false,
+    this.defaultMet = 5.0,
+    this.muscles = const [],
   });
 
   factory ExerciseCatalogItem.fromJson(Map<String, dynamic> json) {
+    final musclesRaw = json['muscles'];
     return ExerciseCatalogItem(
       id: (json['id'] as num).toInt(),
       name: json['name'] as String,
       category: (json['category'] as String?)?.toLowerCase() ?? '',
+      equipment: json['equipment'] as String? ?? 'bodyweight',
+      level: json['level'] as String? ?? 'intermediate',
+      isCustom: json['is_custom'] as bool? ?? false,
+      defaultMet: (json['default_met'] as num?)?.toDouble() ?? 5.0,
+      muscles: musclesRaw is List
+          ? musclesRaw
+              .map((e) => ExerciseMuscle.fromJson(e as Map<String, dynamic>))
+              .toList()
+          : const [],
     );
   }
 }

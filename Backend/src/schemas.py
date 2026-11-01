@@ -516,6 +516,16 @@ class WeightLogOut(BaseModel):
 # ============================================================
 
 
+class ExerciseMuscleMappingOut(BaseModel):
+    """Muscle mapping for a catalog exercise."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    muscle_group: str
+    role: str  # "primary" | "secondary"
+    movement_pattern: str | None = None
+
+
 class ExerciseCatalogItemOut(BaseModel):
     """Standard or custom exercise definition in the catalog."""
 
@@ -526,7 +536,10 @@ class ExerciseCatalogItemOut(BaseModel):
     category: str
     default_met: float
     description: str | None = None
+    equipment: str = "bodyweight"
+    level: str = "intermediate"
     is_custom: bool = False
+    muscles: list[ExerciseMuscleMappingOut] = []
 
 
 class ExerciseLogCreate(BaseModel):
@@ -617,16 +630,6 @@ class ExerciseOut(BaseModel):
 # ============================================================
 # EXERCISE CATALOG MUSCLE MAPPING
 # ============================================================
-
-
-class ExerciseMuscleMappingOut(BaseModel):
-    """Muscle mapping for a catalog exercise."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    muscle_group: str
-    role: str  # "primary" | "secondary"
-    movement_pattern: str | None = None
 
 
 class ExerciseCatalogItemDetailOut(BaseModel):

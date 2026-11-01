@@ -72,148 +72,81 @@ def create_db_and_tables() -> None:
             except Exception:
                 pass
 
-    from src.models import ExerciseCatalogItem, ExerciseMuscleMapping
-    from sqlmodel import select
-
     with Session(engine) as session:
-        existing = session.exec(select(ExerciseCatalogItem)).first()
-        if not existing:
-            default_catalog = [
-                # Cardio
-                ExerciseCatalogItem(name="Running", category="cardio", default_met=9.8, description="Outdoor or treadmill running"),
-                ExerciseCatalogItem(name="Cycling", category="cardio", default_met=7.5, description="Road, stationary, or mountain biking"),
-                ExerciseCatalogItem(name="Swimming", category="cardio", default_met=7.0, description="Freestyle, breaststroke, laps"),
-                ExerciseCatalogItem(name="Walking", category="cardio", default_met=3.8, description="Brisk walking or incline treadmill"),
-                ExerciseCatalogItem(name="Jump Rope", category="cardio", default_met=11.0, description="High-intensity rope jumping"),
-                ExerciseCatalogItem(name="HIIT", category="cardio", default_met=8.0, description="High-Intensity Interval Training"),
-                ExerciseCatalogItem(name="Rowing Machine", category="cardio", default_met=7.0, description="Indoor rowing workout"),
-                ExerciseCatalogItem(name="Elliptical", category="cardio", default_met=6.5, description="Elliptical cross trainer"),
-                # Strength
-                ExerciseCatalogItem(name="Bench Press", category="strength", default_met=5.0, description="Barbell flat bench press for chest"),
-                ExerciseCatalogItem(name="Barbell Squat", category="strength", default_met=5.0, description="Back or front barbell squats for legs"),
-                ExerciseCatalogItem(name="Deadlift", category="strength", default_met=5.5, description="Conventional or sumo barbell deadlifts"),
-                ExerciseCatalogItem(name="Overhead Press", category="strength", default_met=5.0, description="Standing or seated shoulder press"),
-                ExerciseCatalogItem(name="Barbell Row", category="strength", default_met=5.0, description="Bent-over barbell rows for upper back"),
-                ExerciseCatalogItem(name="Dumbbell Curl", category="strength", default_met=4.5, description="Bicep curls with dumbbells"),
-                ExerciseCatalogItem(name="Push-ups", category="strength", default_met=4.5, description="Bodyweight push-ups"),
-                ExerciseCatalogItem(name="Pull-ups", category="strength", default_met=5.0, description="Bodyweight or weighted pull-ups / chin-ups"),
-                ExerciseCatalogItem(name="Dips", category="strength", default_met=4.5, description="Parallel bar dips for triceps and chest"),
-                ExerciseCatalogItem(name="Plank", category="strength", default_met=3.5, description="Isometric core plank"),
-                ExerciseCatalogItem(name="Leg Press", category="strength", default_met=5.0, description="Machine leg press"),
-                # Flexibility
-                ExerciseCatalogItem(name="Yoga", category="flexibility", default_met=2.8, description="Hatha, Vinyasa, or restorative yoga"),
-                ExerciseCatalogItem(name="Pilates", category="flexibility", default_met=3.0, description="Mat or reformer pilates"),
-                ExerciseCatalogItem(name="Stretching", category="flexibility", default_met=2.5, description="Full-body mobility and flexibility routine"),
-            ]
-            session.add_all(default_catalog)
-            session.commit()
-
-        # Seed muscle group mappings for standard catalog exercises.
-        # Only runs if the mapping table is empty, so existing databases
-        # that already have catalog items get the mappings populated too.
-        existing_mappings = session.exec(select(ExerciseMuscleMapping)).first()
-        if not existing_mappings:
-            _seed_muscle_mappings(session)
+        seed_exercise_catalog(session)
 
 
-def _seed_muscle_mappings(session: Session) -> None:
+def seed_exercise_catalog(session: Session) -> None:
     """
-    Populate muscle-group mappings for all standard exercise catalog items.
-
-    This mapping data is the foundation for training volume calculations
-    and workout adequacy evaluation.
-
-    Each tuple is: (exercise_name, muscle_group, role, movement_pattern)
+    Seed and update standard exercise catalog items and muscle mappings
+    idempotently from exercise_catalog_data.CATALOG.
     """
-    from src.models import ExerciseCatalogItem, ExerciseMuscleMapping
     from sqlmodel import select
+    from src.exercise_catalog_data import CATALOG
+    from src.models import ExerciseCatalogItem, ExerciseMuscleMapping
 
-    # Mapping definitions: exercise_name -> [(muscle_group, role, movement_pattern)]
-    MAPPING_DATA: dict[str, list[tuple[str, str, str]]] = {
-        # ── Strength exercises ──────────────────────────────
-        "Bench Press": [
-            ("chest", "primary", "horizontal_push"),
-            ("triceps", "secondary", "horizontal_push"),
-            ("shoulders", "secondary", "horizontal_push"),
-        ],
-        "Barbell Squat": [
-            ("quadriceps", "primary", "squat"),
-            ("glutes", "primary", "squat"),
-            ("hamstrings", "secondary", "squat"),
-        ],
-        "Deadlift": [
-            ("hamstrings", "primary", "hinge"),
-            ("glutes", "primary", "hinge"),
-            ("back", "secondary", "hinge"),
-            ("forearms", "secondary", "hinge"),
-        ],
-        "Overhead Press": [
-            ("shoulders", "primary", "vertical_push"),
-            ("triceps", "secondary", "vertical_push"),
-        ],
-        "Barbell Row": [
-            ("back", "primary", "horizontal_pull"),
-            ("biceps", "secondary", "horizontal_pull"),
-        ],
-        "Dumbbell Curl": [
-            ("biceps", "primary", "isolation"),
-            ("forearms", "secondary", "isolation"),
-        ],
-        "Push-ups": [
-            ("chest", "primary", "horizontal_push"),
-            ("triceps", "secondary", "horizontal_push"),
-            ("shoulders", "secondary", "horizontal_push"),
-        ],
-        "Pull-ups": [
-            ("back", "primary", "vertical_pull"),
-            ("biceps", "secondary", "vertical_pull"),
-        ],
-        "Dips": [
-            ("triceps", "primary", "vertical_push"),
-            ("chest", "secondary", "vertical_push"),
-            ("shoulders", "secondary", "vertical_push"),
-        ],
-        "Plank": [
-            ("abs_core", "primary", "core"),
-        ],
-        "Leg Press": [
-            ("quadriceps", "primary", "squat"),
-            ("glutes", "secondary", "squat"),
-        ],
-        # ── Cardio exercises (no resistance-training muscle mappings) ──
-        # Cardio exercises are intentionally left WITHOUT muscle mappings.
-        # They use duration/distance/MET for their own adequacy model
-        # and should NOT contribute resistance-training set counts.
-    }
-
-    # Look up catalog items and create mappings
-    catalog_items = session.exec(
+    standard_items = session.exec(
         select(ExerciseCatalogItem).where(
-            ExerciseCatalogItem.is_custom == False,
-            ExerciseCatalogItem.deleted_at.is_(None),
+            ExerciseCatalogItem.is_custom == False,  # noqa: E712
         )
     ).all()
+    by_lower_name: dict[str, ExerciseCatalogItem] = {
+        item.name.lower(): item for item in standard_items
+    }
 
-    catalog_by_name = {item.name: item for item in catalog_items}
-    mappings_to_add = []
+    for entry in CATALOG:
+        key = entry["name"].lower()
+        existing_item = by_lower_name.get(key)
+        if existing_item is None:
+            new_item = ExerciseCatalogItem(
+                name=entry["name"],
+                category=entry["category"],
+                default_met=entry["met"],
+                description=entry["description"],
+                equipment=entry["equipment"],
+                level=entry["level"],
+                is_custom=False,
+            )
+            session.add(new_item)
+            by_lower_name[key] = new_item
+        else:
+            existing_item.default_met = entry["met"]
+            existing_item.description = entry["description"]
+            existing_item.equipment = entry["equipment"]
+            existing_item.level = entry["level"]
+            existing_item.deleted_at = None
+            session.add(existing_item)
 
-    for exercise_name, muscle_entries in MAPPING_DATA.items():
-        catalog_item = catalog_by_name.get(exercise_name)
-        if not catalog_item:
+    session.flush()
+
+    existing_mappings = session.exec(select(ExerciseMuscleMapping)).all()
+    mapping_by_pair: dict[tuple[int, str], ExerciseMuscleMapping] = {
+        (m.exercise_catalog_id, m.muscle_group): m for m in existing_mappings
+    }
+
+    for entry in CATALOG:
+        catalog_item = by_lower_name.get(entry["name"].lower())
+        if not catalog_item or catalog_item.id is None:
             continue
-        for muscle_group, role, movement_pattern in muscle_entries:
-            mappings_to_add.append(
-                ExerciseMuscleMapping(
+        for muscle_group, role, movement_pattern in entry["muscles"]:
+            pair = (catalog_item.id, muscle_group)
+            existing_m = mapping_by_pair.get(pair)
+            if existing_m is None:
+                new_m = ExerciseMuscleMapping(
                     exercise_catalog_id=catalog_item.id,
                     muscle_group=muscle_group,
                     role=role,
                     movement_pattern=movement_pattern,
                 )
-            )
+                session.add(new_m)
+                mapping_by_pair[pair] = new_m
+            else:
+                if existing_m.role != role or existing_m.movement_pattern != movement_pattern:
+                    existing_m.role = role
+                    existing_m.movement_pattern = movement_pattern
+                    session.add(existing_m)
 
-    if mappings_to_add:
-        session.add_all(mappings_to_add)
-        session.commit()
+    session.commit()
 
 
 # ============================================================
