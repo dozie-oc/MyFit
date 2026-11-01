@@ -145,6 +145,20 @@ class CustomFoodCreate(BaseModel):
         return val
 
 
+class PersonalPortionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    grams: float = Field(gt=0, le=5000)
+    quantity: float = Field(default=1, gt=0)
+
+    @field_validator("name")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("Portion name cannot be blank.")
+        return val
+
+
 class CustomFoodUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     basis: Literal["serving", "per_100g"] | None = None

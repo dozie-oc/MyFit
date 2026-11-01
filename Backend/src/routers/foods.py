@@ -13,6 +13,7 @@ from src.schemas import (
     FoodItemOut,
     FoodPortionOut,
     FoodSearchResult,
+    PersonalPortionCreate,
 )
 from src.services.food_access import visible_food, visible_portion
 from src.services.food_service import FoodService
@@ -416,6 +417,82 @@ def delete_custom_food(
 
     food.deleted_at = datetime.now(timezone.utc)
     session.add(food)
+    session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{food_id}/portions",
+    response_model=FoodPortionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_personal_portion(
+    food_id: int,
+    data: PersonalPortionCreate,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+):
+    food = session.exec(
+        select(FoodItem).where(
+            FoodItem.id == food_id,
+            *visible_food(current_user.id),
+        )
+    ).first()
+    if food is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Food item not found.",
+        )
+
+    dup = session.exec(
+        select(FoodPortion).where(
+            FoodPortion.food_id == food_id,
+            FoodPortion.user_id == current_user.id,
+            func.lower(FoodPortion.name) == data.name.lower(),
+        )
+    ).first()
+    if dup is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You already have a portion with that name for this food.",
+        )
+
+    portion = FoodPortion(
+        food_id=food_id,
+        user_id=current_user.id,
+        name=data.name,
+        quantity=data.quantity,
+        unit="portion",
+        gram_weight=data.grams,
+    )
+    session.add(portion)
+    session.commit()
+    session.refresh(portion)
+    return FoodPortionOut.model_validate(portion)
+
+
+@router.delete(
+    "/portions/{portion_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_personal_portion(
+    portion_id: int,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+):
+    portion = session.exec(
+        select(FoodPortion).where(
+            FoodPortion.id == portion_id,
+            FoodPortion.user_id == current_user.id,
+        )
+    ).first()
+    if portion is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Portion not found.",
+        )
+
+    session.delete(portion)
     session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

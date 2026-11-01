@@ -325,3 +325,61 @@ def test_custom_food_update_and_delete_and_logged_meal_survival(client, user_a, 
     assert logged["items"][0]["food_name"] == "Plantain"
     assert logged["calories"] == 150.0
 
+
+# ── Q3: personal portions ────────────────────────────
+
+
+def test_personal_portion_endpoints(client, user_a, user_b):
+    food_id = _add_food(name="White Rice", calories_per_100g=130.0)
+
+    # Create personal portion
+    res = client.post(
+        f"/foods/{food_id}/portions",
+        json={"name": "my plate of rice", "grams": 240},
+        headers=user_a,
+    )
+    assert res.status_code == 201
+    portion = res.json()
+    portion_id = portion["id"]
+    assert portion["name"] == "my plate of rice"
+    assert portion["gram_weight"] == 240.0
+    assert portion["quantity"] == 1.0
+    assert portion["unit"] == "portion"
+
+    # Duplicate name for same food and user -> 409
+    dup = client.post(
+        f"/foods/{food_id}/portions",
+        json={"name": "My Plate Of Rice", "grams": 200},
+        headers=user_a,
+    )
+    assert dup.status_code == 409
+
+    # Other user doesn't see it
+    b_food = client.get(f"/foods/{food_id}", headers=user_b).json()
+    assert portion_id not in {p["id"] for p in b_food["portions"]}
+
+    # Logging 1.5x with it resolves quantity * grams = 360g -> 468 kcal
+    meal_a = _meal(
+        client,
+        user_a,
+        {"food_id": food_id, "quantity": 1.5, "portion_id": portion_id},
+    )
+    assert meal_a.status_code == 201
+    assert meal_a.json()["items"][0]["gram_weight"] == 360.0
+    assert pytest.approx(meal_a.json()["calories"], rel=1e-3) == 468.0
+
+    # Another user logging with its id gets 400
+    meal_b = _meal(
+        client,
+        user_b,
+        {"food_id": food_id, "quantity": 1, "portion_id": portion_id},
+    )
+    assert meal_b.status_code == 400
+
+    # Delete ownership: user_b gets 404, user_a deletes it
+    assert client.delete(f"/foods/portions/{portion_id}", headers=user_b).status_code == 404
+    del_res = client.delete(f"/foods/portions/{portion_id}", headers=user_a)
+    assert del_res.status_code in (200, 204)
+    a_food = client.get(f"/foods/{food_id}", headers=user_a).json()
+    assert portion_id not in {p["id"] for p in a_food["portions"]}
+
