@@ -262,6 +262,20 @@ class FoodItem(SQLModel, table=True):
     deleted_at: datetime | None = None
 
 
+    # NULL = shared catalog food; otherwise private to that user.
+    user_id: int | None = Field(
+        default=None,
+        foreign_key="user.id",
+        index=True,
+    )
+
+    # "catalog" (USDA/seed), "custom", "recipe" or "quick".
+    kind: str = Field(
+        default="catalog",
+        max_length=10,
+    )
+
+
 class FoodPortion(SQLModel, table=True):
     """
     Human-friendly measurement for a FoodItem.
@@ -309,6 +323,42 @@ class FoodPortion(SQLModel, table=True):
         default=None,
         max_length=30,
     )
+
+
+    # NULL = shared portion; otherwise a personal portion for that user.
+    user_id: int | None = Field(
+        default=None,
+        foreign_key="user.id",
+        index=True,
+    )
+
+
+class Recipe(SQLModel, table=True):
+    """Recipe metadata for a FoodItem with kind == "recipe"."""
+
+    food_id: int = Field(primary_key=True, foreign_key="fooditem.id")
+
+    servings: float = Field(gt=0)
+
+    cooked_weight_g: float | None = Field(default=None, gt=0)
+
+
+class RecipeIngredient(SQLModel, table=True):
+    """One ingredient line of a recipe, with its resolved gram weight."""
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    recipe_food_id: int = Field(foreign_key="fooditem.id", index=True)
+
+    ingredient_food_id: int = Field(foreign_key="fooditem.id")
+
+    portion_id: int | None = None
+
+    quantity: float = Field(gt=0)
+
+    unit: str
+
+    gram_weight: float = Field(gt=0)
 
 
 class Meal(SQLModel, table=True):

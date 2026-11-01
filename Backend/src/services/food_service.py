@@ -490,13 +490,21 @@ class FoodService:
         *,
         food_id: int,
         portion_id: int,
+        user_id: int | None = None,
     ) -> FoodPortion | None:
+        from src.services.food_access import visible_portion
+
+        conds = [
+            FoodPortion.id == portion_id,
+            FoodPortion.food_id == food_id,
+        ]
+        if user_id is not None:
+            conds.append(visible_portion(user_id))
+        else:
+            conds.append(FoodPortion.user_id.is_(None))
 
         return self.session.exec(
-            select(FoodPortion).where(
-                FoodPortion.id == portion_id,
-                FoodPortion.food_id == food_id,
-            )
+            select(FoodPortion).where(*conds)
         ).first()
 
     # ============================================================
@@ -713,6 +721,7 @@ class FoodService:
         quantity: float,
         portion_id: int | None,
         unit: str | None,
+        user_id: int | None = None,
     ) -> float:
 
         if portion_id is not None:
@@ -720,6 +729,7 @@ class FoodService:
             portion = self.get_food_portion_for_food(
                 food_id=food_id,
                 portion_id=portion_id,
+                user_id=user_id,
             )
 
             if portion is None:

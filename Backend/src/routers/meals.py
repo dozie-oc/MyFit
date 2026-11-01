@@ -12,6 +12,7 @@ from src.schemas import (
     MealOut,
 )
 from src.routers.daily_summary import calculate_daily_summary
+from src.services.food_access import visible_food
 from src.services.food_service import FoodService
 
 
@@ -56,10 +57,10 @@ def build_meal_responses(
         item.portion_id for item in all_items if item.portion_id is not None
     }
 
-    foods: dict[int, str] = {}
+    foods: dict[int, tuple[str, str]] = {}
     if food_ids:
         foods = {
-            f.id: f.name
+            f.id: (f.name, f.kind)
             for f in session.exec(
                 select(FoodItem).where(FoodItem.id.in_(food_ids))
             ).all()
@@ -79,8 +80,12 @@ def build_meal_responses(
         out_items: list[MealItemOut] = []
         for item in items_by_meal.get(meal.id, []):
             item_dict = item.model_dump()
-            item_dict["food_name"] = foods.get(
-                item.food_id, f"Food #{item.food_id}"
+            food_info = foods.get(item.food_id)
+            item_dict["food_name"] = (
+                food_info[0] if food_info else f"Food #{item.food_id}"
+            )
+            item_dict["food_kind"] = (
+                food_info[1] if food_info else "catalog"
             )
             item_dict["portion_name"] = (
                 portions.get(item.portion_id) if item.portion_id else None
@@ -151,7 +156,7 @@ def create_meal(
     foods = session.exec(
         select(FoodItem).where(
             FoodItem.id.in_(unique_food_ids),
-            FoodItem.deleted_at.is_(None)
+            *visible_food(current_user.id, include_hidden=True),
         )
     ).all()
 
@@ -205,6 +210,7 @@ def create_meal(
                 quantity=item_data.quantity,
                 portion_id=item_data.portion_id,
                 unit=item_data.unit,
+                user_id=current_user.id,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -232,6 +238,7 @@ def create_meal(
             portion = food_service.get_food_portion_for_food(
                 food_id=food.id,
                 portion_id=item_data.portion_id,
+                user_id=current_user.id,
             )
 
         unit = portion.unit if portion else (item_data.unit or "g")

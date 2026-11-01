@@ -118,6 +118,7 @@ class FoodItemOut(BaseModel):
     fat_per_100g: float
 
     base_unit: str
+    kind: str = "catalog"
 
     portions: list[FoodPortionOut] = Field(
         default_factory=list
@@ -232,6 +233,7 @@ class MealItemOut(BaseModel):
 
     food_id: int
     food_name: str = ""
+    food_kind: str = "catalog"
     portion_id: int | None = None
     portion_name: str | None = None
 

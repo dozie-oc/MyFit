@@ -226,7 +226,11 @@ def _recommend_meal(
 
     # Load all available active foods
     all_foods: list[FoodItem] = session.exec(
-        select(FoodItem).where(FoodItem.deleted_at.is_(None))
+        select(FoodItem).where(
+            FoodItem.deleted_at.is_(None),
+            FoodItem.user_id.is_(None),
+            FoodItem.kind == "catalog",
+        )
     ).all()
 
     allowed_foods = [

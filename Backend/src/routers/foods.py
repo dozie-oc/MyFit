@@ -9,6 +9,7 @@ from src.schemas import (
     FoodPortionOut,
     FoodSearchResult,
 )
+from src.services.food_access import visible_food, visible_portion
 from src.services.food_service import FoodService
 from src.services.usda_client import (
     USDAAPIError,
@@ -30,6 +31,7 @@ router = APIRouter(
 def build_food_responses(
     session: SessionDep,
     foods: list[FoodItem],
+    user_id: int | None = None,
 ) -> list[FoodItemOut]:
     """
     Build API representations for many FoodItems using a single
@@ -42,11 +44,15 @@ def build_food_responses(
     if not foods:
         return []
 
+    portion_conds = [FoodPortion.food_id.in_([f.id for f in foods])]
+    if user_id is not None:
+        portion_conds.append(visible_portion(user_id))
+    else:
+        portion_conds.append(FoodPortion.user_id.is_(None))
+
     portions = session.exec(
         select(FoodPortion)
-        .where(
-            FoodPortion.food_id.in_([f.id for f in foods])
-        )
+        .where(*portion_conds)
         .order_by(FoodPortion.name)
     ).all()
 
@@ -65,6 +71,7 @@ def build_food_responses(
             carbs_per_100g=food.carbs_per_100g,
             fat_per_100g=food.fat_per_100g,
             base_unit=food.base_unit,
+            kind=food.kind,
             portions=[
                 FoodPortionOut.model_validate(portion)
                 for portion in portions_by_food.get(food.id, [])
@@ -77,10 +84,11 @@ def build_food_responses(
 def build_food_response(
     session: SessionDep,
     food: FoodItem,
+    user_id: int | None = None,
 ) -> FoodItemOut:
     """Build the API representation of a single FoodItem."""
 
-    return build_food_responses(session, [food])[0]
+    return build_food_responses(session, [food], user_id=user_id)[0]
 
 
 # ============================================================
@@ -117,9 +125,7 @@ def get_foods(
 
     statement = (
         select(FoodItem)
-        .where(
-            FoodItem.deleted_at.is_(None)
-        )
+        .where(*visible_food(current_user.id))
         .order_by(FoodItem.name)
         .offset(offset)
         .limit(limit)
@@ -129,7 +135,7 @@ def get_foods(
         statement
     ).all()
 
-    return build_food_responses(session, foods)
+    return build_food_responses(session, foods, user_id=current_user.id)
 
 
 @router.get(
@@ -169,7 +175,7 @@ def search_local_foods(
     statement = (
         select(FoodItem)
         .where(
-            FoodItem.deleted_at.is_(None),
+            *visible_food(current_user.id),
             FoodItem.name.ilike(
                 f"%{query}%"
             ),
@@ -182,7 +188,7 @@ def search_local_foods(
         statement
     ).all()
 
-    return build_food_responses(session, foods)
+    return build_food_responses(session, foods, user_id=current_user.id)
 
 
 @router.get(
@@ -202,7 +208,7 @@ def get_food(
         select(FoodItem)
         .where(
             FoodItem.id == food_id,
-            FoodItem.deleted_at.is_(None),
+            *visible_food(current_user.id),
         )
     ).first()
 
@@ -215,6 +221,7 @@ def get_food(
     return build_food_response(
         session,
         food,
+        user_id=current_user.id,
     )
 
 
