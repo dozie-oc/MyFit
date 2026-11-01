@@ -4,12 +4,14 @@ from fastapi import APIRouter, HTTPException, status
 from sqlmodel import Session, select
 
 from src.dependencies import CurrentUserDep, SessionDep
-from src.models import FoodItem, Meal, MealItem
+from src.models import FoodItem, FoodPortion, Meal, MealItem
 from src.schemas import (
     MealCaloriesOverride,
     MealCreate,
+    MealItemCreate,
     MealItemOut,
     MealOut,
+    QuickMealCreate,
 )
 from src.routers.daily_summary import calculate_daily_summary
 from src.services.food_access import visible_food
@@ -279,6 +281,57 @@ def create_meal(
     return build_meal_response(
         session,
         meal
+    )
+
+
+@router.post(
+    "/quick",
+    response_model=MealOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_quick_meal(
+    data: QuickMealCreate,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+):
+    food = FoodItem(
+        name=data.name,
+        user_id=current_user.id,
+        kind="quick",
+        calories_per_100g=data.calories,
+        protein_per_100g=data.protein,
+        carbs_per_100g=data.carbs,
+        fat_per_100g=data.fat,
+        base_unit="g",
+    )
+    session.add(food)
+    session.flush()
+
+    portion = FoodPortion(
+        food_id=food.id,
+        user_id=current_user.id,
+        name="1 entry",
+        quantity=1.0,
+        unit="entry",
+        gram_weight=100.0,
+    )
+    session.add(portion)
+    session.flush()
+
+    return create_meal(
+        MealCreate(
+            date=data.date,
+            meal_type=data.meal_type,
+            items=[
+                MealItemCreate(
+                    food_id=food.id,
+                    portion_id=portion.id,
+                    quantity=1.0,
+                )
+            ],
+        ),
+        session=session,
+        current_user=current_user,
     )
 
 

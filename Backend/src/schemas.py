@@ -265,6 +265,32 @@ class MealCreate(BaseModel):
         return val
 
 
+class QuickMealCreate(BaseModel):
+    date: date
+    meal_type: str = Field(default="snack")
+    name: str = Field(min_length=1, max_length=80)
+    calories: float = Field(ge=0, le=10000)
+    protein: float = Field(default=0, ge=0)
+    carbs: float = Field(default=0, ge=0)
+    fat: float = Field(default=0, ge=0)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("Name cannot be blank.")
+        return val
+
+    @field_validator("meal_type")
+    @classmethod
+    def _validate_meal_type(cls, value: str) -> str:
+        val = value.strip().lower()
+        if val not in ("breakfast", "lunch", "dinner", "snack"):
+            return "snack"
+        return val
+
+
 class MealCaloriesOverride(BaseModel):
     """
     Allows the user to override the calculated meal calorie total.

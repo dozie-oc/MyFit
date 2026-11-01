@@ -383,3 +383,46 @@ def test_personal_portion_endpoints(client, user_a, user_b):
     a_food = client.get(f"/foods/{food_id}", headers=user_a).json()
     assert portion_id not in {p["id"] for p in a_food["portions"]}
 
+
+# ── Q4: quick add ────────────────────────────────────
+
+
+def test_quick_add_meal(client, user_a, user_b):
+    res = client.post(
+        "/meals/quick",
+        json={
+            "date": "2026-10-20",
+            "meal_type": "lunch",
+            "name": "Mama Put Lunch",
+            "calories": 700,
+            "protein": 30,
+            "carbs": 80,
+            "fat": 25,
+        },
+        headers=user_a,
+    )
+    assert res.status_code == 201
+    meal = res.json()
+    assert meal["calories"] == 700.0
+    assert meal["protein"] == 30.0
+    assert meal["carbs"] == 80.0
+    assert meal["fat"] == 25.0
+    assert len(meal["items"]) == 1
+    item = meal["items"][0]
+    assert item["food_name"] == "Mama Put Lunch"
+    assert item["food_kind"] == "quick"
+    quick_food_id = item["food_id"]
+
+    # Absent from /foods and /foods/search
+    assert quick_food_id not in _food_ids(client.get("/foods", headers=user_a))
+    assert quick_food_id not in _food_ids(
+        client.get("/foods/search", params={"q": "Mama"}, headers=user_a)
+    )
+
+    # Another user can't see or log it
+    assert client.get(f"/foods/{quick_food_id}", headers=user_b).status_code == 404
+    assert (
+        _meal(client, user_b, {"food_id": quick_food_id, "quantity": 100, "unit": "g"}).status_code
+        == 400
+    )
+
