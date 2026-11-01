@@ -780,3 +780,59 @@ class RecommendationResponse(BaseModel):
     meal_type: str | None = None     # "breakfast" | "lunch" | "dinner" | "snack"
     items: list[RecommendationItem] = Field(default_factory=list)
 
+
+
+
+class RecipeCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    servings: float = Field(gt=0, le=200)
+    cooked_weight_g: float | None = Field(default=None, gt=0)
+    ingredients: list[MealItemCreate] = Field(min_length=1, max_length=60)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("Recipe name cannot be blank.")
+        return val
+
+
+class RecipeIngredientOut(BaseModel):
+    id: int | None = None
+    food_id: int
+    food_name: str
+    portion_id: int | None = None
+    portion_name: str | None = None
+    quantity: float
+    unit: str
+    gram_weight: float
+    calories: float
+    protein: float
+    carbs: float
+    fat: float
+
+
+class RecipeOut(BaseModel):
+    id: int
+    food_id: int
+    name: str
+    servings: float
+    cooked_weight_g: float | None = None
+    total_grams: float
+    cooked_grams: float
+    portion_grams: float
+    total_calories: float
+    total_protein: float
+    total_carbs: float
+    total_fat: float
+    calories_per_portion: float
+    protein_per_portion: float
+    carbs_per_portion: float
+    fat_per_portion: float
+    calories_per_100g: float
+    protein_per_100g: float
+    carbs_per_100g: float
+    fat_per_100g: float
+    portions: list[FoodPortionOut] = Field(default_factory=list)
+    ingredients: list[RecipeIngredientOut] = Field(default_factory=list)

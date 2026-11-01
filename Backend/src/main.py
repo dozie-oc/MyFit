@@ -16,6 +16,7 @@ from src.routers.daily_summary import router as summary_router
 from src.routers.foods import router as food_router
 from src.routers.goals import router as goals_router
 from src.routers.recommendations import router as recommendations_router
+from src.routers.recipes import router as recipes_router
 
 
 @asynccontextmanager
@@ -55,6 +56,7 @@ app.include_router(summary_router)
 app.include_router(food_router)
 app.include_router(goals_router)
 app.include_router(recommendations_router)
+app.include_router(recipes_router)
 
 
 @app.get("/")

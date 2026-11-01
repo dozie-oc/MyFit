@@ -426,3 +426,132 @@ def test_quick_add_meal(client, user_a, user_b):
         == 400
     )
 
+
+
+# ---------------------------------------------------------------------------
+# Q8: Recipes
+# ---------------------------------------------------------------------------
+
+
+def test_recipe_endpoints_and_math(client: TestClient, user_a, user_b):
+    food_a_id = _add_food(name="Ing A", calories_per_100g=100, protein_per_100g=10, carbs_per_100g=10, fat_per_100g=2)
+    food_b_id = _add_food(name="Ing B", calories_per_100g=200, protein_per_100g=20, carbs_per_100g=20, fat_per_100g=4)
+    private_b_id = _add_food(name="Secret B", user_id=_user_id(client, user_b), kind="custom")
+
+    # A (100 kcal/100g x 300g = 300 kcal) + B (200 kcal/100g x 100g = 200 kcal) = 500 kcal over 400g
+    res = client.post(
+        "/recipes",
+        json={
+            "name": "Jollof Pot",
+            "servings": 4,
+            "ingredients": [
+                {"food_id": food_a_id, "quantity": 300, "unit": "g"},
+                {"food_id": food_b_id, "quantity": 100, "unit": "g"},
+            ],
+        },
+        headers=user_a,
+    )
+    assert res.status_code == 201
+    recipe = res.json()
+    recipe_food_id = recipe["food_id"]
+    assert recipe["total_grams"] == 400.0
+    assert recipe["total_calories"] == 500.0
+    assert recipe["portion_grams"] == 100.0
+    assert recipe["calories_per_portion"] == 125.0
+    assert recipe["calories_per_100g"] == 125.0
+    portion_id = recipe["portions"][0]["id"]
+    assert recipe["portions"][0]["name"] == "1 portion"
+    assert recipe["portions"][0]["gram_weight"] == 100.0
+
+    # Logging 1.5 portions -> 187.5 kcal
+    meal_res = _meal(client, user_a, {"food_id": recipe_food_id, "portion_id": portion_id, "quantity": 1.5})
+    assert meal_res.status_code == 201
+    meal_id = meal_res.json()["id"]
+    assert meal_res.json()["calories"] == 187.5
+    assert meal_res.json()["items"][0]["food_kind"] == "recipe"
+
+    # cooked_weight_g=500 -> per-100g 100 kcal, portion 125g (still 125 kcal/portion)
+    upd = client.put(
+        f"/recipes/{recipe_food_id}",
+        json={
+            "name": "Jollof Pot",
+            "servings": 4,
+            "cooked_weight_g": 500,
+            "ingredients": [
+                {"food_id": food_a_id, "quantity": 300, "unit": "g"},
+                {"food_id": food_b_id, "quantity": 100, "unit": "g"},
+            ],
+        },
+        headers=user_a,
+    )
+    assert upd.status_code == 200
+    u_data = upd.json()
+    assert u_data["calories_per_100g"] == 100.0
+    assert u_data["portion_grams"] == 125.0
+    assert u_data["calories_per_portion"] == 125.0
+    assert u_data["portions"][0]["id"] == portion_id
+
+    # Editing recipe doesn't alter earlier logged meal
+    meals = client.get("/meals", headers=user_a).json()
+    logged = next(m for m in meals if m["id"] == meal_id)
+    assert logged["calories"] == 187.5
+
+    # Nested recipe -> 400
+    nested = client.post(
+        "/recipes",
+        json={
+            "name": "Meta Soup",
+            "servings": 2,
+            "ingredients": [{"food_id": recipe_food_id, "quantity": 100, "unit": "g"}],
+        },
+        headers=user_a,
+    )
+    assert nested.status_code == 400
+    assert "Recipes can't contain other recipes yet" in nested.json()["detail"]
+
+    # Another user's custom food as ingredient -> 400
+    stolen = client.post(
+        "/recipes",
+        json={
+            "name": "Stolen Stew",
+            "servings": 2,
+            "ingredients": [{"food_id": private_b_id, "quantity": 100, "unit": "g"}],
+        },
+        headers=user_a,
+    )
+    assert stolen.status_code == 400
+
+    # Too-low cooked weight (500 kcal / 40g -> 1250 kcal/100g) -> 422
+    too_low = client.post(
+        "/recipes",
+        json={
+            "name": "Ultra Dense",
+            "servings": 2,
+            "cooked_weight_g": 40,
+            "ingredients": [
+                {"food_id": food_a_id, "quantity": 300, "unit": "g"},
+                {"food_id": food_b_id, "quantity": 100, "unit": "g"},
+            ],
+        },
+        headers=user_a,
+    )
+    assert too_low.status_code == 422
+
+    # Another user's GET or PUT -> 404
+    assert client.get(f"/recipes/{recipe_food_id}", headers=user_b).status_code == 404
+    assert (
+        client.put(
+            f"/recipes/{recipe_food_id}",
+            json={
+                "name": "Hijack",
+                "servings": 2,
+                "ingredients": [{"food_id": food_a_id, "quantity": 100, "unit": "g"}],
+            },
+            headers=user_b,
+        ).status_code
+        == 404
+    )
+
+    # DELETE via /foods/custom/{id} works
+    assert client.delete(f"/foods/custom/{recipe_food_id}", headers=user_a).status_code == 204
+    assert client.get(f"/recipes/{recipe_food_id}", headers=user_a).status_code == 404
