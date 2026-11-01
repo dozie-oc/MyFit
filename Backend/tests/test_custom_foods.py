@@ -180,3 +180,148 @@ def test_recommendations_ignore_custom_foods(client, user_a):
     names = [i.get("name", "") for i in res.json().get("items") or []]
     assert not any("Zzcustom" in n for n in names)
 
+
+# ── Q2: custom food endpoints ────────────────────────
+
+
+def test_create_custom_food_serving_basis(client, user_a):
+    res = client.post(
+        "/foods/custom",
+        json={
+            "name": "  Jollof Rice  ",
+            "basis": "serving",
+            "serving_grams": 150,
+            "serving_name": "plate",
+            "calories": 300,
+            "protein": 6,
+            "carbs": 45,
+            "fat": 9,
+        },
+        headers=user_a,
+    )
+    assert res.status_code == 201
+    body = res.json()
+    assert body["name"] == "Jollof Rice"
+    assert body["kind"] == "custom"
+    assert pytest.approx(body["calories_per_100g"], rel=1e-3) == 200.0
+    assert pytest.approx(body["protein_per_100g"], rel=1e-3) == 4.0
+    assert pytest.approx(body["carbs_per_100g"], rel=1e-3) == 30.0
+    assert pytest.approx(body["fat_per_100g"], rel=1e-3) == 6.0
+    assert len(body["portions"]) == 1
+    assert body["portions"][0]["name"] == "1 plate"
+    assert body["portions"][0]["gram_weight"] == 150.0
+
+
+def test_create_custom_food_per_100g_basis(client, user_a):
+    res = client.post(
+        "/foods/custom",
+        json={
+            "name": "Garri",
+            "basis": "per_100g",
+            "calories": 350,
+            "protein": 2,
+            "carbs": 84,
+            "fat": 1,
+        },
+        headers=user_a,
+    )
+    assert res.status_code == 201
+    body = res.json()
+    assert body["calories_per_100g"] == 350.0
+    assert body["carbs_per_100g"] == 84.0
+    assert body["portions"] == []
+
+
+def test_custom_food_density_validation(client, user_a):
+    res_cal = client.post(
+        "/foods/custom",
+        json={"name": "Too Dense", "basis": "per_100g", "calories": 950},
+        headers=user_a,
+    )
+    assert res_cal.status_code == 422
+
+    res_mac = client.post(
+        "/foods/custom",
+        json={
+            "name": "Impossible Macros",
+            "basis": "per_100g",
+            "calories": 400,
+            "protein": 50,
+            "carbs": 40,
+            "fat": 20,
+        },
+        headers=user_a,
+    )
+    assert res_mac.status_code == 422
+
+
+def test_custom_food_duplicate_name_per_user(client, user_a, user_b):
+    payload = {"name": "My Oats", "basis": "per_100g", "calories": 370}
+    assert client.post("/foods/custom", json=payload, headers=user_a).status_code == 201
+    assert (
+        client.post(
+            "/foods/custom",
+            json={"name": "my oats", "basis": "per_100g", "calories": 360},
+            headers=user_a,
+        ).status_code
+        == 409
+    )
+    assert client.post("/foods/custom", json=payload, headers=user_b).status_code == 201
+
+
+def test_custom_food_update_and_delete_and_logged_meal_survival(client, user_a, user_b):
+    created = client.post(
+        "/foods/custom",
+        json={
+            "name": "Plantain",
+            "basis": "serving",
+            "serving_grams": 100,
+            "calories": 120,
+            "carbs": 30,
+        },
+        headers=user_a,
+    ).json()
+    food_id = created["id"]
+
+    # Other user cannot PATCH or DELETE
+    assert (
+        client.patch(
+            f"/foods/custom/{food_id}",
+            json={"calories": 150},
+            headers=user_b,
+        ).status_code
+        == 404
+    )
+    assert client.delete(f"/foods/custom/{food_id}", headers=user_b).status_code == 404
+
+    # Owner updates serving_grams and calories
+    patched = client.patch(
+        f"/foods/custom/{food_id}",
+        json={"basis": "serving", "serving_grams": 200, "calories": 300},
+        headers=user_a,
+    )
+    assert patched.status_code == 200
+    assert pytest.approx(patched.json()["calories_per_100g"], rel=1e-3) == 150.0
+    assert patched.json()["portions"][0]["gram_weight"] == 200.0
+
+    # Log a meal before deleting the food
+    meal_res = _meal(client, user_a, {"food_id": food_id, "quantity": 100, "unit": "g"})
+    assert meal_res.status_code == 201
+    meal_id = meal_res.json()["id"]
+
+    # Delete food
+    del_res = client.delete(f"/foods/custom/{food_id}", headers=user_a)
+    assert del_res.status_code in (200, 204)
+
+    # Disappears from list and search
+    assert food_id not in _food_ids(client.get("/foods", headers=user_a))
+    assert food_id not in _food_ids(
+        client.get("/foods/search", params={"q": "Plantain"}, headers=user_a)
+    )
+
+    # Logged meal still displays food name and nutrition
+    meals = client.get("/meals", headers=user_a).json()
+    logged = next(m for m in meals if m["id"] == meal_id)
+    assert logged["items"][0]["food_name"] == "Plantain"
+    assert logged["calories"] == 150.0
+

@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -123,6 +124,46 @@ class FoodItemOut(BaseModel):
     portions: list[FoodPortionOut] = Field(
         default_factory=list
     )
+
+
+class CustomFoodCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    basis: Literal["serving", "per_100g"] = "serving"
+    serving_grams: float = Field(default=100, gt=0, le=5000)
+    serving_name: str = Field(default="serving", min_length=1, max_length=30)
+    calories: float = Field(ge=0, le=10000)
+    protein: float = Field(default=0, ge=0)
+    carbs: float = Field(default=0, ge=0)
+    fat: float = Field(default=0, ge=0)
+
+    @field_validator("name", "serving_name")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("Field cannot be blank.")
+        return val
+
+
+class CustomFoodUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    basis: Literal["serving", "per_100g"] | None = None
+    serving_grams: float | None = Field(default=None, gt=0, le=5000)
+    serving_name: str | None = Field(default=None, min_length=1, max_length=30)
+    calories: float | None = Field(default=None, ge=0, le=10000)
+    protein: float | None = Field(default=None, ge=0)
+    carbs: float | None = Field(default=None, ge=0)
+    fat: float | None = Field(default=None, ge=0)
+
+    @field_validator("name", "serving_name")
+    @classmethod
+    def _strip_optional(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        val = value.strip()
+        if not val:
+            raise ValueError("Field cannot be blank.")
+        return val
 
 
 # ============================================================

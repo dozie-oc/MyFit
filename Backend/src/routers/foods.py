@@ -1,10 +1,15 @@
-from fastapi import APIRouter, HTTPException, Query, status
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, HTTPException, Query, Response, status
+from sqlalchemy import func
 from sqlmodel import select
 
 from src.config import settings
 from src.dependencies import CurrentUserDep, SessionDep
 from src.models import FoodItem, FoodPortion
 from src.schemas import (
+    CustomFoodCreate,
+    CustomFoodUpdate,
     FoodItemOut,
     FoodPortionOut,
     FoodSearchResult,
@@ -189,6 +194,230 @@ def search_local_foods(
     ).all()
 
     return build_food_responses(session, foods, user_id=current_user.id)
+
+
+def validate_per_100g_density(
+    calories_per_100g: float,
+    protein_per_100g: float,
+    carbs_per_100g: float,
+    fat_per_100g: float,
+    detail_prefix: str = "Invalid nutrition per 100g",
+) -> None:
+    if calories_per_100g > 900:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{detail_prefix}: calories per 100g cannot exceed 900 kcal.",
+        )
+    if protein_per_100g + carbs_per_100g + fat_per_100g > 100.5:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{detail_prefix}: protein + carbs + fat cannot exceed 100g per 100g.",
+        )
+
+
+def check_user_food_name_unique(
+    session: SessionDep,
+    user_id: int,
+    name: str,
+    exclude_food_id: int | None = None,
+) -> None:
+    conds = [
+        FoodItem.user_id == user_id,
+        FoodItem.deleted_at.is_(None),
+        FoodItem.kind.in_(("custom", "recipe")),
+        func.lower(FoodItem.name) == name.strip().lower(),
+    ]
+    if exclude_food_id is not None:
+        conds.append(FoodItem.id != exclude_food_id)
+    dup = session.exec(select(FoodItem).where(*conds)).first()
+    if dup is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You already have a custom food or recipe with that name.",
+        )
+
+
+@router.post(
+    "/custom",
+    response_model=FoodItemOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_custom_food(
+    data: CustomFoodCreate,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+):
+    check_user_food_name_unique(session, current_user.id, data.name)
+
+    factor = (100.0 / data.serving_grams) if data.basis == "serving" else 1.0
+    cal_100 = data.calories * factor
+    pro_100 = data.protein * factor
+    carb_100 = data.carbs * factor
+    fat_100 = data.fat * factor
+
+    validate_per_100g_density(cal_100, pro_100, carb_100, fat_100)
+
+    food = FoodItem(
+        name=data.name,
+        user_id=current_user.id,
+        kind="custom",
+        calories_per_100g=cal_100,
+        protein_per_100g=pro_100,
+        carbs_per_100g=carb_100,
+        fat_per_100g=fat_100,
+        base_unit="g",
+    )
+    session.add(food)
+    session.flush()
+
+    if data.basis == "serving":
+        portion = FoodPortion(
+            food_id=food.id,
+            name=f"1 {data.serving_name}",
+            quantity=1.0,
+            unit=data.serving_name,
+            gram_weight=data.serving_grams,
+        )
+        session.add(portion)
+
+    session.commit()
+    session.refresh(food)
+    return build_food_response(session, food, user_id=current_user.id)
+
+
+@router.patch(
+    "/custom/{food_id}",
+    response_model=FoodItemOut,
+)
+def update_custom_food(
+    food_id: int,
+    data: CustomFoodUpdate,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+):
+    food = session.exec(
+        select(FoodItem).where(
+            FoodItem.id == food_id,
+            FoodItem.user_id == current_user.id,
+            FoodItem.kind == "custom",
+            FoodItem.deleted_at.is_(None),
+        )
+    ).first()
+    if food is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Custom food not found.",
+        )
+
+    if data.name is not None:
+        check_user_food_name_unique(
+            session, current_user.id, data.name, exclude_food_id=food.id
+        )
+        food.name = data.name
+
+    serving_portion = session.exec(
+        select(FoodPortion).where(
+            FoodPortion.food_id == food.id,
+            FoodPortion.user_id.is_(None),
+        )
+    ).first()
+
+    if data.basis is not None:
+        basis = data.basis
+    elif data.serving_grams is not None:
+        basis = "serving"
+    elif serving_portion is not None:
+        basis = "serving"
+    else:
+        basis = "per_100g"
+
+    sg = (
+        data.serving_grams
+        if data.serving_grams is not None
+        else (serving_portion.gram_weight if serving_portion else 100.0)
+    )
+    factor = (100.0 / sg) if basis == "serving" else 1.0
+
+    cal_100 = (
+        data.calories * factor
+        if data.calories is not None
+        else food.calories_per_100g
+    )
+    pro_100 = (
+        data.protein * factor
+        if data.protein is not None
+        else food.protein_per_100g
+    )
+    carb_100 = (
+        data.carbs * factor if data.carbs is not None else food.carbs_per_100g
+    )
+    fat_100 = data.fat * factor if data.fat is not None else food.fat_per_100g
+
+    validate_per_100g_density(cal_100, pro_100, carb_100, fat_100)
+
+    food.calories_per_100g = cal_100
+    food.protein_per_100g = pro_100
+    food.carbs_per_100g = carb_100
+    food.fat_per_100g = fat_100
+    food.updated_at = datetime.now(timezone.utc)
+    session.add(food)
+
+    if data.serving_grams is not None or data.serving_name is not None or data.basis == "serving":
+        sname = (
+            data.serving_name
+            if data.serving_name is not None
+            else (serving_portion.unit if serving_portion else "serving")
+        )
+        if serving_portion is not None:
+            if data.serving_grams is not None:
+                serving_portion.gram_weight = data.serving_grams
+            if data.serving_name is not None:
+                serving_portion.name = f"1 {sname}"
+                serving_portion.unit = sname
+            session.add(serving_portion)
+        elif basis == "serving":
+            session.add(
+                FoodPortion(
+                    food_id=food.id,
+                    name=f"1 {sname}",
+                    quantity=1.0,
+                    unit=sname,
+                    gram_weight=sg,
+                )
+            )
+
+    session.commit()
+    session.refresh(food)
+    return build_food_response(session, food, user_id=current_user.id)
+
+
+@router.delete(
+    "/custom/{food_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_custom_food(
+    food_id: int,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+):
+    food = session.exec(
+        select(FoodItem).where(
+            FoodItem.id == food_id,
+            FoodItem.user_id == current_user.id,
+            FoodItem.kind.in_(("custom", "recipe")),
+            FoodItem.deleted_at.is_(None),
+        )
+    ).first()
+    if food is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Custom food not found.",
+        )
+
+    food.deleted_at = datetime.now(timezone.utc)
+    session.add(food)
+    session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(
