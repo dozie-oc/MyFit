@@ -836,3 +836,19 @@ class RecipeOut(BaseModel):
     fat_per_100g: float
     portions: list[FoodPortionOut] = Field(default_factory=list)
     ingredients: list[RecipeIngredientOut] = Field(default_factory=list)
+
+
+
+class MealCopyRequest(BaseModel):
+    date: date
+    meal_type: str | None = None
+
+    @field_validator("meal_type")
+    @classmethod
+    def _validate_meal_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        val = value.strip().lower()
+        if val not in ("breakfast", "lunch", "dinner", "snack"):
+            return "snack"
+        return val

@@ -305,6 +305,34 @@ class _MealDetailSheet extends StatelessWidget {
               ),
             );
           }),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.replay_outlined, size: 16),
+            label: const Text('Log again'),
+            onPressed: () async {
+              final now = DateTime.now();
+              final today =
+                  '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+              try {
+                await ApiClient.copyMeal(meal.id, date: today);
+                if (context.mounted) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Logged again for today')),
+                  );
+                }
+              } on ApiException catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(e.message),
+                      backgroundColor: Colors.red.shade700,
+                    ),
+                  );
+                }
+              }
+            },
+          ),
           const SizedBox(height: 24),
         ],
       ),

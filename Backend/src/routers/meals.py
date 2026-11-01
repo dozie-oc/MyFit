@@ -7,6 +7,7 @@ from src.dependencies import CurrentUserDep, SessionDep
 from src.models import FoodItem, FoodPortion, Meal, MealItem
 from src.schemas import (
     MealCaloriesOverride,
+    MealCopyRequest,
     MealCreate,
     MealItemCreate,
     MealItemOut,
@@ -495,3 +496,75 @@ def delete_meal(
     )
 
     return None
+
+
+
+@router.post(
+    "/{meal_id}/copy",
+    response_model=MealOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def copy_meal(
+    meal_id: int,
+    data: MealCopyRequest,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+):
+    source = session.exec(
+        select(Meal).where(
+            Meal.id == meal_id,
+            Meal.user_id == current_user.id,
+            Meal.deleted_at.is_(None),
+        )
+    ).first()
+    if source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meal not found",
+        )
+
+    source_items = session.exec(
+        select(MealItem).where(
+            MealItem.meal_id == source.id,
+            MealItem.deleted_at.is_(None),
+        )
+    ).all()
+
+    cloned = Meal(
+        user_id=current_user.id,
+        date=data.date,
+        meal_type=data.meal_type if data.meal_type is not None else source.meal_type,
+        calories=source.calories,
+        protein=source.protein,
+        carbs=source.carbs,
+        fat=source.fat,
+    )
+    session.add(cloned)
+    session.flush()
+
+    for item in source_items:
+        session.add(
+            MealItem(
+                meal_id=cloned.id,
+                food_id=item.food_id,
+                portion_id=item.portion_id,
+                quantity=item.quantity,
+                unit=item.unit,
+                gram_weight=item.gram_weight,
+                calories=item.calories,
+                protein=item.protein,
+                carbs=item.carbs,
+                fat=item.fat,
+            )
+        )
+
+    session.commit()
+    session.refresh(cloned)
+
+    calculate_daily_summary(
+        session,
+        current_user.id,
+        cloned.date,
+    )
+
+    return build_meal_response(session, cloned)

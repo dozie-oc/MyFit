@@ -555,3 +555,76 @@ def test_recipe_endpoints_and_math(client: TestClient, user_a, user_b):
     # DELETE via /foods/custom/{id} works
     assert client.delete(f"/foods/custom/{recipe_food_id}", headers=user_a).status_code == 204
     assert client.get(f"/recipes/{recipe_food_id}", headers=user_a).status_code == 404
+
+
+
+# ---------------------------------------------------------------------------
+# Q10: Copy a logged meal
+# ---------------------------------------------------------------------------
+
+
+def test_copy_meal(client: TestClient, user_a, user_b):
+    # Create a custom food and log it in a meal
+    cf = client.post(
+        "/foods/custom",
+        json={
+            "name": "Morning Oats",
+            "serving_name": "1 bowl",
+            "serving_grams": 200,
+            "calories": 350,
+            "protein": 12,
+            "carbs": 55,
+            "fat": 7,
+        },
+        headers=user_a,
+    ).json()
+    food_id = cf["id"]
+    portion_id = cf["portions"][0]["id"]
+
+    orig = client.post(
+        "/meals",
+        json={
+            "date": "2026-10-20",
+            "meal_type": "breakfast",
+            "items": [{"food_id": food_id, "portion_id": portion_id, "quantity": 1}],
+        },
+        headers=user_a,
+    ).json()
+    meal_id = orig["id"]
+    assert orig["calories"] == 350.0
+
+    # Delete the custom food before copying
+    assert client.delete(f"/foods/custom/{food_id}", headers=user_a).status_code == 204
+
+    # Another user gets 404 trying to copy user_a's meal
+    assert (
+        client.post(
+            f"/meals/{meal_id}/copy",
+            json={"date": "2026-10-21"},
+            headers=user_b,
+        ).status_code
+        == 404
+    )
+
+    # Copy meal to a new date; totals equal original even though the food was deleted
+    copy_res = client.post(
+        f"/meals/{meal_id}/copy",
+        json={"date": "2026-10-21", "meal_type": "lunch"},
+        headers=user_a,
+    )
+    assert copy_res.status_code == 201
+    copied = copy_res.json()
+    assert copied["id"] != meal_id
+    assert copied["date"] == "2026-10-21"
+    assert copied["meal_type"] == "lunch"
+    assert copied["calories"] == 350.0
+    assert copied["protein"] == 12.0
+    assert copied["carbs"] == 55.0
+    assert copied["fat"] == 7.0
+    assert len(copied["items"]) == 1
+    assert copied["items"][0]["food_name"] == "Morning Oats"
+    assert copied["items"][0]["calories"] == 350.0
+
+    # Daily summary on target date was recalculated
+    summary = client.get("/summary/2026-10-21", headers=user_a).json()
+    assert summary["calories_in"] == 350.0

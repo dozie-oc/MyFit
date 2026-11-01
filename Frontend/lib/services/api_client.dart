@@ -381,6 +381,19 @@ class ApiClient {
     return Meal.fromJson(res as Map<String, dynamic>);
   }
 
+  static Future<Meal> copyMeal(
+    int id, {
+    required String date,
+    String? mealType,
+  }) async {
+    final res = await post('/meals/$id/copy', {
+      'date': date,
+      if (mealType != null) 'meal_type': mealType,
+    });
+    notifyDataChanged({DataScope.meals});
+    return Meal.fromJson(res as Map<String, dynamic>);
+  }
+
   static Future<void> deleteMeal(int id) async {
     await delete('/meals/$id');
     notifyDataChanged({DataScope.meals});
