@@ -1,3 +1,4 @@
+from datetime import date
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, select
@@ -153,3 +154,69 @@ def test_catalog_endpoint_returns_muscles(session: Session, client: TestClient):
     assert len(bench["muscles"]) == 3
     primary_groups = {m["muscle_group"] for m in bench["muscles"] if m["role"] == "primary"}
     assert "chest" in primary_groups
+
+
+def test_lowercase_logging_links_catalog_and_shows_in_adequacy(
+    session: Session, client: TestClient
+):
+    seed_exercise_catalog(session)
+    headers = _headers(client, "q2_user_a")
+    res = client.post(
+        "/exercises",
+        headers=headers,
+        json={
+            "date": date.today().isoformat(),
+            "name": "bench press",
+            "category": "strength",
+            "sets": 3,
+            "reps": 8,
+            "weight_kg": 60.0,
+        },
+    )
+    assert res.status_code == 201
+    ex_out = res.json()
+    assert ex_out["exercise_catalog_id"] is not None
+
+    # Adequacy reflects chest sets
+    adeq = client.get("/exercises/adequacy", headers=headers)
+    assert adeq.status_code == 200
+    mg = {m["muscle_group"]: m for m in adeq.json()["muscle_groups"]}
+    assert mg["chest"]["sets_completed"] == 3.0
+
+
+def test_logging_other_users_custom_catalog_id_returns_400(
+    session: Session, client: TestClient
+):
+    seed_exercise_catalog(session)
+    headers_a = _headers(client, "q2_owner")
+    headers_b = _headers(client, "q2_other")
+
+    from src.models import User
+
+    user_a = session.exec(select(User).where(User.username == "q2_owner")).first()
+    custom_item = ExerciseCatalogItem(
+        name="Secret A Press",
+        category="strength",
+        default_met=5.0,
+        is_custom=True,
+        user_id=user_a.id,
+    )
+    session.add(custom_item)
+    session.commit()
+    session.refresh(custom_item)
+
+    res = client.post(
+        "/exercises",
+        headers=headers_b,
+        json={
+            "date": "2026-11-01",
+            "name": "Secret A Press",
+            "category": "strength",
+            "exercise_catalog_id": custom_item.id,
+            "sets": 3,
+            "reps": 10,
+        },
+    )
+    assert res.status_code == 400
+    assert "Exercise not found in catalog" in res.json()["detail"]
+

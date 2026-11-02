@@ -1,7 +1,8 @@
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
-from sqlmodel import Session, select, or_
+from sqlalchemy import func
+from sqlmodel import Session, select
 
 from src.dependencies import CurrentUserDep, SessionDep
 from src.models import Exercise, ExerciseCatalogItem, ExerciseMuscleMapping, UserGoal
@@ -14,6 +15,7 @@ from src.schemas import (
     MuscleGroupStatus,
 )
 from src.routers.daily_summary import calculate_daily_summary
+from src.services.exercise_access import visible_exercise
 from src.services.training_service import (
     INTENSITY_MULTIPLIERS,
     evaluate_training_adequacy,
@@ -109,11 +111,7 @@ def get_exercise_catalog(
     Retrieve standard exercise catalogue items and user-defined custom exercises.
     """
     query = select(ExerciseCatalogItem).where(
-        or_(
-            ExerciseCatalogItem.is_custom == False,  # Standard catalog
-            ExerciseCatalogItem.user_id == current_user.id,  # User custom
-        ),
-        ExerciseCatalogItem.deleted_at.is_(None),
+        *visible_exercise(current_user.id),
     )
 
     if category:
@@ -200,6 +198,48 @@ def get_training_adequacy(
 # ============================================================
 
 
+def _resolve_met(
+    session: Session,
+    user_id: int,
+    data,
+) -> tuple[float, ExerciseCatalogItem | None]:
+    cat_id = getattr(data, "exercise_catalog_id", None)
+    if cat_id:
+        cat_item = session.exec(
+            select(ExerciseCatalogItem).where(
+                ExerciseCatalogItem.id == cat_id,
+                *visible_exercise(user_id),
+            )
+        ).first()
+        if not cat_item:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Exercise not found in catalog.",
+            )
+        return cat_item.default_met, cat_item
+
+    cat_item = session.exec(
+        select(ExerciseCatalogItem).where(
+            func.lower(ExerciseCatalogItem.name) == data.name.strip().lower(),
+            *visible_exercise(user_id),
+        )
+    ).first()
+    if cat_item:
+        return cat_item.default_met, cat_item
+
+    name_lower = data.name.lower()
+    for kw, kw_met in KEYWORD_MET.items():
+        if kw in name_lower:
+            return kw_met, None
+
+    cat_str = (getattr(data, "category", None) or "other").lower()
+    return DEFAULT_CATEGORY_MET.get(cat_str, 5.0), None
+
+
+def _to_out(exercise: Exercise) -> ExerciseOut:
+    return ExerciseOut.model_validate(exercise)
+
+
 @router.post(
     "",
     response_model=ExerciseOut,
@@ -215,35 +255,11 @@ def create_exercise(
     Calories burned are calculated using MET, duration, intensity, and user weight.
     """
     # 1. Determine MET from catalogue item, name keyword, or category
-    met = DEFAULT_CATEGORY_MET.get(exercise_data.category.lower(), 5.0)
-
-    if exercise_data.exercise_catalog_id:
-        cat_item = session.get(ExerciseCatalogItem, exercise_data.exercise_catalog_id)
-        if cat_item:
-            met = cat_item.default_met
-            if not exercise_data.category or exercise_data.category == "other":
-                exercise_data.category = cat_item.category
-    else:
-        # Auto-lookup catalog item by name for muscle-group mapping
-        cat_item = session.exec(
-            select(ExerciseCatalogItem).where(
-                ExerciseCatalogItem.name == exercise_data.name,
-                ExerciseCatalogItem.deleted_at.is_(None),
-            )
-        ).first()
-        if cat_item:
-            exercise_data.exercise_catalog_id = cat_item.id
-            met = cat_item.default_met
-            if not exercise_data.category or exercise_data.category == "other":
-                exercise_data.category = cat_item.category
-        else:
-            # Check keyword matches for MET
-            name_lower = exercise_data.name.lower()
-            for kw, kw_met in KEYWORD_MET.items():
-                if kw in name_lower:
-                    met = kw_met
-                    break
-
+    met, cat_item = _resolve_met(session, current_user.id, exercise_data)
+    if cat_item:
+        exercise_data.exercise_catalog_id = cat_item.id
+        if not exercise_data.category or exercise_data.category == "other":
+            exercise_data.category = cat_item.category
 
     # 2. Compute calories burned
     user_weight = current_user.weight or 70.0
@@ -288,21 +304,7 @@ def create_exercise(
         exercise.date,
     )
 
-    return ExerciseOut(
-        id=exercise.id,
-        date=exercise.date,
-        name=exercise.name,
-        category=exercise.category,
-        exercise_catalog_id=exercise.exercise_catalog_id,
-        sets=exercise.sets,
-        reps=exercise.reps,
-        weight_kg=exercise.weight_kg,
-        duration_minutes=exercise.duration_minutes,
-        distance_km=exercise.distance_km,
-        intensity=exercise.intensity,
-        rir=exercise.rir,
-        calories_burned=exercise.calories_burned,
-    )
+    return _to_out(exercise)
 
 
 @router.get(
@@ -331,26 +333,7 @@ def get_exercises(
 
     exercises = session.exec(statement).all()
 
-    return [
-        ExerciseOut(
-            id=e.id,
-            date=e.date,
-            name=e.name,
-            category=e.category,
-            exercise_catalog_id=e.exercise_catalog_id,
-            sets=e.sets,
-            reps=e.reps,
-            weight_kg=e.weight_kg,
-            duration_minutes=e.duration_minutes,
-            distance_km=e.distance_km,
-            intensity=e.intensity,
-            rir=e.rir,
-            calories_burned=e.calories_burned if e.calories_burned > 0 else (
-                (e.duration_minutes or 0) * e.calories_burned_per_minute
-            ),
-        )
-        for e in exercises
-    ]
+    return [_to_out(e) for e in exercises]
 
 
 @router.get(
@@ -376,23 +359,7 @@ def get_exercise(
             detail="Exercise not found",
         )
 
-    return ExerciseOut(
-        id=exercise.id,
-        date=exercise.date,
-        name=exercise.name,
-        category=exercise.category,
-        exercise_catalog_id=exercise.exercise_catalog_id,
-        sets=exercise.sets,
-        reps=exercise.reps,
-        weight_kg=exercise.weight_kg,
-        duration_minutes=exercise.duration_minutes,
-        distance_km=exercise.distance_km,
-        intensity=exercise.intensity,
-        rir=exercise.rir,
-        calories_burned=exercise.calories_burned if exercise.calories_burned > 0 else (
-            (exercise.duration_minutes or 0) * exercise.calories_burned_per_minute
-        ),
-    )
+    return _to_out(exercise)
 
 
 @router.delete(
