@@ -41,13 +41,13 @@ def session():
     with Session(test_engine) as session:
         # Populate exercise catalog
         catalog = [
-            ExerciseCatalogItem(name="Running", category="cardio", default_met=9.8, description="Outdoor running"),
-            ExerciseCatalogItem(name="Push-ups", category="strength", default_met=4.5, description="Bodyweight push-ups"),
-            ExerciseCatalogItem(name="Plank", category="strength", default_met=3.5, description="Isometric core plank"),
-            ExerciseCatalogItem(name="Bench Press", category="strength", default_met=5.0, description="Barbell bench press"),
-            ExerciseCatalogItem(name="Barbell Squat", category="strength", default_met=5.0, description="Barbell squats"),
-            ExerciseCatalogItem(name="Dumbbell Curl", category="strength", default_met=4.5, description="Dumbbell curls"),
-            ExerciseCatalogItem(name="Leg Press", category="strength", default_met=5.0, description="Machine leg press"),
+            ExerciseCatalogItem(name="Running", category="cardio", default_met=9.8, equipment="bodyweight", level="beginner", description="Outdoor running"),
+            ExerciseCatalogItem(name="Push-ups", category="strength", default_met=4.5, equipment="bodyweight", level="beginner", description="Bodyweight push-ups"),
+            ExerciseCatalogItem(name="Plank", category="strength", default_met=3.5, equipment="bodyweight", level="beginner", description="Isometric core plank"),
+            ExerciseCatalogItem(name="Bench Press", category="strength", default_met=5.0, equipment="barbell", description="Barbell bench press"),
+            ExerciseCatalogItem(name="Barbell Squat", category="strength", default_met=5.0, equipment="barbell", description="Barbell squats"),
+            ExerciseCatalogItem(name="Dumbbell Curl", category="strength", default_met=4.5, equipment="dumbbell", level="beginner", description="Dumbbell curls"),
+            ExerciseCatalogItem(name="Leg Press", category="strength", default_met=5.0, equipment="machines", level="beginner", description="Machine leg press"),
         ]
         session.add_all(catalog)
 

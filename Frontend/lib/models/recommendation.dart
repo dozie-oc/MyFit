@@ -1,5 +1,6 @@
 class RecommendationItem {
   final String name;
+  final int? exerciseCatalogId;
   final String? description;
   final String? category;
   final int? sets;
@@ -16,6 +17,7 @@ class RecommendationItem {
 
   const RecommendationItem({
     required this.name,
+    this.exerciseCatalogId,
     this.description,
     this.category,
     this.sets,
@@ -34,6 +36,7 @@ class RecommendationItem {
   factory RecommendationItem.fromJson(Map<String, dynamic> json) {
     return RecommendationItem(
       name: json['name'] as String? ?? '',
+      exerciseCatalogId: (json['exercise_catalog_id'] as num?)?.toInt(),
       description: json['description'] as String?,
       category: json['category'] as String?,
       sets: (json['sets'] as num?)?.toInt(),

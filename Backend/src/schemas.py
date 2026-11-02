@@ -766,6 +766,7 @@ class RecommendationItem(BaseModel):
     unit: str | None = None
     gram_weight: float | None = None
     # Exercise-specific
+    exercise_catalog_id: int | None = None
     category: str | None = None
     sets: int | None = None
     reps: int | None = None

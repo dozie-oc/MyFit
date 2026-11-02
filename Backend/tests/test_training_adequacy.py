@@ -55,20 +55,20 @@ def session():
     with Session(test_engine) as sess:
         # Populate exercise catalog
         catalog = [
-            ExerciseCatalogItem(name="Bench Press", category="strength", default_met=5.0, description="Barbell bench press"),
-            ExerciseCatalogItem(name="Barbell Squat", category="strength", default_met=5.0, description="Barbell squats"),
-            ExerciseCatalogItem(name="Deadlift", category="strength", default_met=5.5, description="Deadlifts"),
-            ExerciseCatalogItem(name="Overhead Press", category="strength", default_met=5.0, description="Shoulder press"),
-            ExerciseCatalogItem(name="Barbell Row", category="strength", default_met=5.0, description="Bent-over rows"),
-            ExerciseCatalogItem(name="Push-ups", category="strength", default_met=4.5, description="Bodyweight push-ups"),
-            ExerciseCatalogItem(name="Pull-ups", category="strength", default_met=5.0, description="Pull-ups"),
-            ExerciseCatalogItem(name="Dumbbell Curl", category="strength", default_met=4.5, description="Bicep curls"),
-            ExerciseCatalogItem(name="Plank", category="strength", default_met=3.5, description="Core plank"),
-            ExerciseCatalogItem(name="Leg Press", category="strength", default_met=5.0, description="Machine leg press"),
-            ExerciseCatalogItem(name="Running", category="cardio", default_met=9.8, description="Running"),
-            ExerciseCatalogItem(name="Walking", category="cardio", default_met=3.5, description="Walking"),
-            ExerciseCatalogItem(name="Swimming", category="cardio", default_met=7.0, description="Swimming"),
-            ExerciseCatalogItem(name="Yoga", category="flexibility", default_met=3.0, description="Yoga"),
+            ExerciseCatalogItem(name="Bench Press", category="strength", default_met=5.0, equipment="barbell", description="Barbell bench press"),
+            ExerciseCatalogItem(name="Barbell Squat", category="strength", default_met=5.0, equipment="barbell", description="Barbell squats"),
+            ExerciseCatalogItem(name="Deadlift", category="strength", default_met=5.5, equipment="barbell", level="advanced", description="Deadlifts"),
+            ExerciseCatalogItem(name="Overhead Press", category="strength", default_met=5.0, equipment="barbell", description="Shoulder press"),
+            ExerciseCatalogItem(name="Barbell Row", category="strength", default_met=5.0, equipment="barbell", description="Bent-over rows"),
+            ExerciseCatalogItem(name="Push-ups", category="strength", default_met=4.5, equipment="bodyweight", level="beginner", description="Bodyweight push-ups"),
+            ExerciseCatalogItem(name="Pull-ups", category="strength", default_met=5.0, equipment="bodyweight", description="Pull-ups"),
+            ExerciseCatalogItem(name="Dumbbell Curl", category="strength", default_met=4.5, equipment="dumbbell", level="beginner", description="Bicep curls"),
+            ExerciseCatalogItem(name="Plank", category="strength", default_met=3.5, equipment="bodyweight", level="beginner", description="Core plank"),
+            ExerciseCatalogItem(name="Leg Press", category="strength", default_met=5.0, equipment="machines", level="beginner", description="Machine leg press"),
+            ExerciseCatalogItem(name="Running", category="cardio", default_met=9.8, equipment="bodyweight", level="beginner", description="Running"),
+            ExerciseCatalogItem(name="Walking", category="cardio", default_met=3.5, equipment="bodyweight", level="beginner", description="Walking"),
+            ExerciseCatalogItem(name="Swimming", category="cardio", default_met=7.0, equipment="bodyweight", level="beginner", description="Swimming"),
+            ExerciseCatalogItem(name="Yoga", category="flexibility", default_met=3.0, equipment="bodyweight", level="beginner", description="Yoga"),
         ]
         sess.add_all(catalog)
         sess.commit()

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, select
@@ -219,4 +219,210 @@ def test_logging_other_users_custom_catalog_id_returns_400(
     )
     assert res.status_code == 400
     assert "Exercise not found in catalog" in res.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "item_equip,user_equip,expected",
+    [
+        ("barbell", set(), True),
+        ("bodyweight", {"none"}, True),
+        ("barbell", {"none"}, False),
+        ("bodyweight", {"bodyweight"}, True),
+        ("dumbbell", {"bodyweight"}, False),
+        ("dumbbell", {"dumbbells"}, True),
+        ("bodyweight", {"dumbbells"}, True),
+        ("barbell", {"dumbbells"}, False),
+        ("machines|cables", {"machine"}, True),
+        ("machines|cables", {"cable"}, True),
+        ("machines|cables", {"dumbbell"}, False),
+        ("bands", {"bands"}, True),
+        ("bands", {"band"}, True),
+    ],
+)
+def test_equipment_ok_table(item_equip, user_equip, expected):
+    from src.services.recommendation_service import _equipment_ok
+
+    assert _equipment_ok(item_equip, user_equip) is expected
+
+
+def test_recommender_scoping_variety_and_level(session: Session):
+    from src.auth.auth import hash_password
+    from src.models import Exercise, User, UserGoal
+    from src.services.recommendation_service import get_recommendation
+
+    user_a = User(
+        username="rec_a",
+        hashed_password=hash_password("StrongPass123!"),
+        weight=70.0,
+        height=175.0,
+        birthdate=date(1995, 1, 1),
+    )
+    user_b = User(
+        username="rec_b",
+        hashed_password=hash_password("StrongPass123!"),
+        weight=70.0,
+        height=175.0,
+        birthdate=date(1995, 1, 1),
+    )
+    session.add_all([user_a, user_b])
+    session.commit()
+    session.refresh(user_a)
+    session.refresh(user_b)
+
+    # User A has a custom exercise targeting chest; User B should never be recommended it
+    custom_a = ExerciseCatalogItem(
+        name="A Custom Chest Press",
+        category="strength",
+        default_met=5.0,
+        equipment="bodyweight",
+        level="beginner",
+        is_custom=True,
+        user_id=user_a.id,
+    )
+    session.add(custom_a)
+    session.commit()
+    session.refresh(custom_a)
+    session.add(
+        ExerciseMuscleMapping(
+            exercise_catalog_id=custom_a.id,
+            muscle_group="chest",
+            role="primary",
+            movement_pattern="horizontal_push",
+        )
+    )
+    session.commit()
+
+    goal_b = UserGoal(
+        user_id=user_b.id,
+        goal_type="build_muscle",
+        training_experience="beginner",
+        available_equipment="bodyweight",
+    )
+    session.add(goal_b)
+    session.commit()
+
+    # With only User A's custom exercise in the catalog, User B gets no recommendation
+    rec_b = get_recommendation(session, user_b, today=date(2026, 11, 1), rec_type="exercise")
+    assert rec_b.has_recommendation is False
+
+    # Beginner prefers level == "beginner" over "advanced" when otherwise equal
+    adv_push = ExerciseCatalogItem(
+        name="Planche Push-up",
+        category="strength",
+        default_met=5.0,
+        equipment="bodyweight",
+        level="advanced",
+        is_custom=False,
+    )
+    beg_push = ExerciseCatalogItem(
+        name="Standard Push-up",
+        category="strength",
+        default_met=5.0,
+        equipment="bodyweight",
+        level="beginner",
+        is_custom=False,
+    )
+    session.add_all([adv_push, beg_push])
+    session.commit()
+    session.refresh(adv_push)
+    session.refresh(beg_push)
+    for item in (adv_push, beg_push):
+        session.add(
+            ExerciseMuscleMapping(
+                exercise_catalog_id=item.id,
+                muscle_group="chest",
+                role="primary",
+                movement_pattern="horizontal_push",
+            )
+        )
+    session.commit()
+
+    rec_level = get_recommendation(session, user_b, today=date(2026, 11, 1), rec_type="exercise")
+    assert rec_level.has_recommendation is True
+    assert rec_level.items[0].name == "Standard Push-up"
+    assert rec_level.items[0].exercise_catalog_id == beg_push.id
+
+
+def test_recommender_yesterday_penalty_and_daily_rotation(session: Session):
+    from src.auth.auth import hash_password
+    from src.models import Exercise, User, UserGoal
+    from src.services.recommendation_service import get_recommendation
+
+    user = User(
+        username="rec_rot",
+        hashed_password=hash_password("StrongPass123!"),
+        weight=70.0,
+        height=175.0,
+        birthdate=date(1995, 1, 1),
+    )
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+
+    goal = UserGoal(
+        user_id=user.id,
+        goal_type="build_muscle",
+        training_experience="beginner",
+        available_equipment="bodyweight",
+    )
+    session.add(goal)
+
+    # Three equal candidates
+    cands = []
+    for name in ("Chest A", "Chest B", "Chest C"):
+        it = ExerciseCatalogItem(
+            name=name,
+            category="strength",
+            default_met=4.5,
+            equipment="bodyweight",
+            level="beginner",
+            is_custom=False,
+        )
+        session.add(it)
+        cands.append(it)
+    session.commit()
+    for it in cands:
+        session.refresh(it)
+        session.add(
+            ExerciseMuscleMapping(
+                exercise_catalog_id=it.id,
+                muscle_group="chest",
+                role="primary",
+                movement_pattern="horizontal_push",
+            )
+        )
+    session.commit()
+
+    # Over 14 consecutive days, at least 2 distinct picks, and deterministic per day
+    base_day = date(2026, 11, 1)
+    picks = set()
+    for d in range(14):
+        day = base_day + timedelta(days=d)
+        r1 = get_recommendation(session, user, today=day, rec_type="exercise")
+        r2 = get_recommendation(session, user, today=day, rec_type="exercise")
+        assert r1.items[0].name == r2.items[0].name
+        picks.add(r1.items[0].name)
+    assert len(picks) >= 2
+
+    # Exercise done yesterday ranks below an otherwise equal one
+    first_pick_name = get_recommendation(session, user, today=base_day, rec_type="exercise").items[0].name
+    first_item = next(c for c in cands if c.name == first_pick_name)
+    session.add(
+        Exercise(
+            user_id=user.id,
+            date=base_day - timedelta(days=1),
+            name=first_item.name,
+            category="strength",
+            exercise_catalog_id=first_item.id,
+            sets=3,
+            reps=10,
+            calories_burned=50.0,
+            calories_burned_per_minute=5.0,
+        )
+    )
+    session.commit()
+
+    after_yesterday = get_recommendation(session, user, today=base_day, rec_type="exercise")
+    assert after_yesterday.items[0].name != first_pick_name
+
 

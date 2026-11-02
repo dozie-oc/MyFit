@@ -9,6 +9,7 @@ No LLM, no ML model. Pure deterministic rule-based logic.
 """
 
 from datetime import date as Date, datetime, timedelta, timezone
+import zlib
 from sqlmodel import Session, select
 
 from src.models import (
@@ -20,6 +21,7 @@ from src.models import (
     UserGoal,
 )
 from src.schemas import RecommendationItem, RecommendationResponse
+from src.services.exercise_access import visible_exercise
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -69,35 +71,6 @@ GOAL_EXERCISE_CATEGORY: dict[str, list[str]] = {
     "improve_fitness": ["cardio", "strength", "flexibility"],
     "improve_endurance": ["cardio"],
     "get_stronger": ["strength"],
-}
-
-# Equipment requirements per known catalog exercise
-EXERCISE_EQUIPMENT_MAP: dict[str, str] = {
-    # Barbell exercises
-    "bench press": "barbell",
-    "barbell squat": "barbell",
-    "deadlift": "barbell",
-    "overhead press": "barbell",
-    "barbell row": "barbell",
-    # Dumbbell exercises
-    "dumbbell curl": "dumbbell",
-    # Machine exercises
-    "leg press": "machines",
-    "rowing machine": "machines",
-    "elliptical": "machines",
-    # Bodyweight / none (compatible with any equipment)
-    "push-ups": "bodyweight",
-    "pull-ups": "bodyweight",
-    "dips": "bodyweight",
-    "plank": "bodyweight",
-    "running": "bodyweight",
-    "walking": "bodyweight",
-    "swimming": "bodyweight",
-    "jump rope": "bodyweight",
-    "hiit": "bodyweight",
-    "yoga": "bodyweight",
-    "pilates": "bodyweight",
-    "stretching": "bodyweight",
 }
 
 # Dietary classification keywords
@@ -384,53 +357,21 @@ def _recommend_meal(
 # EXERCISE RECOMMENDATION
 # ──────────────────────────────────────────────────────────────────────
 
-def _is_exercise_equipment_compatible(
-    exercise_name: str,
-    user_equipment_set: set[str],
-) -> bool:
-    """Check if an exercise is compatible with the user's available equipment."""
-    if not user_equipment_set:
+_EQUIP_SYNONYMS = {
+    "dumbbells": "dumbbell",
+    "machine": "machines",
+    "cable": "cables",
+    "band": "bands",
+    "kettlebells": "kettlebell",
+}
+
+
+def _equipment_ok(item_equipment: str, user_equipment: set[str]) -> bool:
+    if not user_equipment:
         return True
-
-    # If the user has explicitly said 'none', only allow exercises that are
-    # confirmed bodyweight in our catalog map. Do NOT fall back to bodyweight
-    # for unknown exercises, since an unknown exercise may require equipment.
-    user_has_no_equipment = user_equipment_set == {"none"}
-
-    lower = exercise_name.lower().strip()
-    req = EXERCISE_EQUIPMENT_MAP.get(lower)
-
-    if not req:
-        # Heuristic inference for unknown exercise names
-        if "barbell" in lower:
-            req = "barbell"
-        elif "dumbbell" in lower:
-            req = "dumbbell"
-        elif "machine" in lower or "cable" in lower:
-            req = "machines"
-        else:
-            # Unknown exercise with no keyword hint:
-            # only allow if the user has real equipment (not 'none'-only)
-            if user_has_no_equipment:
-                return False
-            req = "bodyweight"
-
-    if req == "bodyweight":
-        return True
-
-    # Bodyweight exercises are always allowed (they need no equipment)
-    has_barbell = "barbell" in user_equipment_set
-    has_dumbbell = "dumbbell" in user_equipment_set or "dumbbells" in user_equipment_set
-    has_machines = "machines" in user_equipment_set or "machine" in user_equipment_set or "cables" in user_equipment_set
-
-    if req == "barbell" and has_barbell:
-        return True
-    if req == "dumbbell" and has_dumbbell:
-        return True
-    if req == "machines" and has_machines:
-        return True
-
-    return False
+    have = {_EQUIP_SYNONYMS.get(e, e) for e in user_equipment} - {"none"}
+    options = set(item_equipment.split("|"))
+    return "bodyweight" in options or bool(options & have)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -529,7 +470,7 @@ def get_recommendation(
                 items=[],
             )
         return _recommend_exercise_with_adequacy(
-            session, user, goal, today_exercises, adequacy
+            session, user, goal, today_exercises, adequacy, today=today
         )
 
     if rec_type == "meal":
@@ -578,7 +519,7 @@ def get_recommendation(
     # Natural flow: eat breakfast -> do workout!
     if "breakfast" in logged_types and not exercise_done:
         return _recommend_exercise_with_adequacy(
-            session, user, goal, today_exercises, adequacy
+            session, user, goal, today_exercises, adequacy, today=today
         )
 
     # Case 4: Exercise done, next meal needed
@@ -596,7 +537,7 @@ def get_recommendation(
     # Case 6: Nutrition is done, but exercise remains
     if not exercise_done:
         return _recommend_exercise_with_adequacy(
-            session, user, goal, today_exercises, adequacy
+            session, user, goal, today_exercises, adequacy, today=today
         )
 
     # Default fallback: on track
@@ -613,6 +554,7 @@ def _recommend_exercise_with_adequacy(
     goal: UserGoal | None,
     today_exercises: list[Exercise],
     adequacy,
+    today: Date | None = None,
 ) -> RecommendationResponse:
     """
     Workout-aware exercise recommendation.
@@ -626,15 +568,18 @@ def _recommend_exercise_with_adequacy(
     2. Session adequate → no more recommendations needed
     3. Session not adequate → recommend next exercise with reasoning
     """
+    if today is None:
+        today = Date.today()
+
     goal_type = (goal.goal_type if goal else None) or "improve_fitness"
     experience = (goal.training_experience or "beginner").lower() if goal else "beginner"
     equipment_str = (goal.available_equipment or "") if goal else ""
     user_equipment = {e.strip().lower() for e in equipment_str.split(",") if e.strip()}
     done_names = {e.name.lower().strip() for e in today_exercises}
 
-    # Load full catalog
+    # Load visible catalog for this user
     catalog: list[ExerciseCatalogItem] = session.exec(
-        select(ExerciseCatalogItem).where(ExerciseCatalogItem.deleted_at.is_(None))
+        select(ExerciseCatalogItem).where(*visible_exercise(user.id))
     ).all()
 
     if not catalog:
@@ -650,7 +595,7 @@ def _recommend_exercise_with_adequacy(
     eligible = [
         item for item in catalog
         if item.name.lower().strip() not in done_names
-        and _is_exercise_equipment_compatible(item.name, user_equipment)
+        and _equipment_ok(item.equipment, user_equipment)
     ]
 
     if not eligible:
@@ -693,6 +638,25 @@ def _recommend_exercise_with_adequacy(
 
     needed_muscle_set = {mv.muscle_group for mv in undertrained_muscles[:4]}
 
+    recent_exercises = session.exec(
+        select(Exercise).where(
+            Exercise.user_id == user.id,
+            Exercise.deleted_at.is_(None),
+            Exercise.date >= today - timedelta(days=2),
+            Exercise.date <= today - timedelta(days=1),
+        )
+    ).all()
+    yesterday_ids = {
+        e.exercise_catalog_id
+        for e in recent_exercises
+        if e.date == today - timedelta(days=1) and e.exercise_catalog_id is not None
+    }
+    two_days_ago_ids = {
+        e.exercise_catalog_id
+        for e in recent_exercises
+        if e.date == today - timedelta(days=2) and e.exercise_catalog_id is not None
+    }
+
     # Score eligible exercises: prefer those that hit needed muscles
     def _adequacy_score(item: ExerciseCatalogItem) -> float:
         """
@@ -724,16 +688,31 @@ def _recommend_exercise_with_adequacy(
         if not has_mappings and item.category == "strength":
             muscle_score += 20
 
-        # Experience-based preference
+        # Experience-based preference using catalog level
         exp_bonus = 0
         if experience == "beginner":
-            if item.name.lower() in ("push-ups", "walking", "plank", "barbell squat", "bench press"):
+            if item.level == "beginner":
                 exp_bonus = -15
+            elif item.level == "advanced":
+                exp_bonus = 15
+        elif experience == "intermediate":
+            if item.level == "intermediate":
+                exp_bonus = -10
         elif experience == "advanced":
-            if item.name.lower() in ("deadlift", "running", "overhead press", "barbell row", "hiit"):
+            if item.level == "advanced":
                 exp_bonus = -15
+            elif item.level == "beginner":
+                exp_bonus = 10
 
-        return muscle_score + cat_bonus + exp_bonus
+        recency_penalty = 0
+        if item.id in yesterday_ids:
+            recency_penalty = 25
+        elif item.id in two_days_ago_ids:
+            recency_penalty = 15
+
+        tie_breaker = zlib.crc32(f"{user.id}:{today.isoformat()}:{item.id}".encode()) % 7
+
+        return muscle_score + cat_bonus + exp_bonus + recency_penalty + tie_breaker
 
     eligible.sort(key=_adequacy_score)
     pick = eligible[0]
@@ -762,6 +741,7 @@ def _recommend_exercise_with_adequacy(
 
     item = RecommendationItem(
         name=pick.name,
+        exercise_catalog_id=pick.id,
         category=pick.category,
         sets=sets,
         reps=reps,

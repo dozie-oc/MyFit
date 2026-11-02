@@ -418,6 +418,8 @@ class _RecommendationContent extends StatelessWidget {
           'date': dateStr,
           'name': name,
           'category': category,
+          if (item.exerciseCatalogId != null)
+            'exercise_catalog_id': item.exerciseCatalogId,
           if (sets != null) 'sets': sets,
           if (reps != null) 'reps': reps,
           if (duration != null) 'duration_minutes': duration,
