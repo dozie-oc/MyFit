@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
@@ -21,11 +22,26 @@ router = APIRouter(
 )
 
 
+@dataclass
+class ResolvedRecipe:
+    resolved: list[dict]
+    total_grams: float
+    cooked: float
+    total_cal: float
+    total_pro: float
+    total_carb: float
+    total_fat: float
+    cal_100: float
+    pro_100: float
+    carb_100: float
+    fat_100: float
+
+
 def _resolve_recipe_ingredients(
     session: SessionDep,
     user_id: int,
     data: RecipeCreate,
-):
+) -> ResolvedRecipe:
     food_ids = list({ing.food_id for ing in data.ingredients})
     foods = session.exec(
         select(FoodItem).where(
@@ -117,18 +133,18 @@ def _resolve_recipe_ingredients(
         detail_prefix="Cooked weight looks too low",
     )
 
-    return (
-        resolved,
-        round(total_grams, 2),
-        round(cooked, 2),
-        round(total_cal, 2),
-        round(total_pro, 2),
-        round(total_carb, 2),
-        round(total_fat, 2),
-        cal_100,
-        pro_100,
-        carb_100,
-        fat_100,
+    return ResolvedRecipe(
+        resolved=resolved,
+        total_grams=round(total_grams, 2),
+        cooked=round(cooked, 2),
+        total_cal=round(total_cal, 2),
+        total_pro=round(total_pro, 2),
+        total_carb=round(total_carb, 2),
+        total_fat=round(total_fat, 2),
+        cal_100=cal_100,
+        pro_100=pro_100,
+        carb_100=carb_100,
+        fat_100=fat_100,
     )
 
 
@@ -160,10 +176,6 @@ def _build_recipe_response(
 
     ingredients_out: list[RecipeIngredientOut] = []
     total_grams = 0.0
-    total_cal = 0.0
-    total_pro = 0.0
-    total_carb = 0.0
-    total_fat = 0.0
 
     for row in ing_rows:
         ing_food = foods_by_id.get(row.ingredient_food_id)
@@ -178,10 +190,6 @@ def _build_recipe_response(
             food_name = "Unknown food"
 
         total_grams += row.gram_weight
-        total_cal += nutrition["calories"]
-        total_pro += nutrition["protein"]
-        total_carb += nutrition["carbs"]
-        total_fat += nutrition["fat"]
 
         portion = portions_by_id.get(row.portion_id) if row.portion_id else None
         ingredients_out.append(
@@ -207,6 +215,10 @@ def _build_recipe_response(
         else total_grams
     )
     portion_grams = round(cooked / recipe.servings, 2) if recipe.servings > 0 else 0.0
+    total_cal = food.calories_per_100g * cooked / 100.0
+    total_pro = food.protein_per_100g * cooked / 100.0
+    total_carb = food.carbs_per_100g * cooked / 100.0
+    total_fat = food.fat_per_100g * cooked / 100.0
 
     portions = session.exec(
         select(FoodPortion)
@@ -255,28 +267,16 @@ def create_recipe(
 ):
     check_user_food_name_unique(session, current_user.id, data.name)
 
-    (
-        resolved,
-        _total_grams,
-        cooked,
-        _total_cal,
-        _total_pro,
-        _total_carb,
-        _total_fat,
-        cal_100,
-        pro_100,
-        carb_100,
-        fat_100,
-    ) = _resolve_recipe_ingredients(session, current_user.id, data)
+    res = _resolve_recipe_ingredients(session, current_user.id, data)
 
     food = FoodItem(
         name=data.name,
         user_id=current_user.id,
         kind="recipe",
-        calories_per_100g=cal_100,
-        protein_per_100g=pro_100,
-        carbs_per_100g=carb_100,
-        fat_per_100g=fat_100,
+        calories_per_100g=res.cal_100,
+        protein_per_100g=res.pro_100,
+        carbs_per_100g=res.carb_100,
+        fat_per_100g=res.fat_100,
         base_unit="g",
     )
     session.add(food)
@@ -289,7 +289,7 @@ def create_recipe(
     )
     session.add(recipe)
 
-    for item in resolved:
+    for item in res.resolved:
         session.add(
             RecipeIngredient(
                 recipe_food_id=food.id,
@@ -307,7 +307,7 @@ def create_recipe(
             name="1 portion",
             quantity=1.0,
             unit="portion",
-            gram_weight=round(cooked / data.servings, 2),
+            gram_weight=round(res.cooked / data.servings, 2),
         )
     )
 
@@ -388,19 +388,7 @@ def update_recipe(
         exclude_food_id=food.id,
     )
 
-    (
-        resolved,
-        _total_grams,
-        cooked,
-        _total_cal,
-        _total_pro,
-        _total_carb,
-        _total_fat,
-        cal_100,
-        pro_100,
-        carb_100,
-        fat_100,
-    ) = _resolve_recipe_ingredients(session, current_user.id, data)
+    res = _resolve_recipe_ingredients(session, current_user.id, data)
 
     old_ings = session.exec(
         select(RecipeIngredient).where(RecipeIngredient.recipe_food_id == food.id)
@@ -409,10 +397,10 @@ def update_recipe(
         session.delete(old_ing)
 
     food.name = data.name
-    food.calories_per_100g = cal_100
-    food.protein_per_100g = pro_100
-    food.carbs_per_100g = carb_100
-    food.fat_per_100g = fat_100
+    food.calories_per_100g = res.cal_100
+    food.protein_per_100g = res.pro_100
+    food.carbs_per_100g = res.carb_100
+    food.fat_per_100g = res.fat_100
     food.updated_at = datetime.now(timezone.utc)
     session.add(food)
 
@@ -427,7 +415,7 @@ def update_recipe(
         )
     ).first()
     if portion is not None:
-        portion.gram_weight = round(cooked / data.servings, 2)
+        portion.gram_weight = round(res.cooked / data.servings, 2)
         session.add(portion)
     else:
         session.add(
@@ -436,11 +424,11 @@ def update_recipe(
                 name="1 portion",
                 quantity=1.0,
                 unit="portion",
-                gram_weight=round(cooked / data.servings, 2),
+                gram_weight=round(res.cooked / data.servings, 2),
             )
         )
 
-    for item in resolved:
+    for item in res.resolved:
         session.add(
             RecipeIngredient(
                 recipe_food_id=food.id,

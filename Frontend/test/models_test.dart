@@ -180,12 +180,14 @@ void main() {
         'id': 7,
         'name': 'Homemade Stew',
         'kind': 'custom',
+        'avoided': true,
         'calories_per_100g': 150,
         'protein_per_100g': 10,
         'carbs_per_100g': 12,
         'fat_per_100g': 6,
       });
       expect(food.kind, 'custom');
+      expect(food.avoided, true);
 
       final defaultKindFood = FoodItem.fromJson({
         'id': 8,
@@ -196,6 +198,7 @@ void main() {
         'fat_per_100g': 0.2,
       });
       expect(defaultKindFood.kind, 'catalog');
+      expect(defaultKindFood.avoided, false);
 
       const input = CustomFoodInput(
         name: 'Oats',
@@ -250,6 +253,99 @@ void main() {
       expect(exercise.name, 'Bench Press');
       expect(exercise.weightKg, 80.0);
       expect(exercise.caloriesBurned, 120.0);
+      expect(exercise.isPr, isFalse);
+
+      final prEx = Exercise.fromJson({
+        'id': 13,
+        'date': '2026-10-20',
+        'name': 'Bench Press',
+        'category': 'strength',
+        'sets': 3,
+        'reps': 8,
+        'weight_kg': 85,
+        'calories_burned': 110,
+        'is_pr': true,
+      });
+      expect(prEx.isPr, isTrue);
+
+      final hist = ExerciseHistory.fromJson({
+        'last': {
+          'id': 13,
+          'date': '2026-10-20',
+          'name': 'Bench Press',
+          'category': 'strength',
+          'sets': 3,
+          'reps': 8,
+          'weight_kg': 85,
+          'calories_burned': 110,
+        },
+        'best_weight_kg': 85.0,
+        'best_est_1rm': 107.7,
+        'times_logged': 5,
+      });
+      expect(hist.timesLogged, 5);
+      expect(hist.bestWeightKg, 85.0);
+      expect(hist.bestEst1rm, 107.7);
+      expect(hist.last?.id, 13);
+
+      final recItem = RecommendationItem.fromJson({
+        'name': 'Bench Press',
+        'exercise_catalog_id': 9,
+        'category': 'strength',
+        'sets': 4,
+        'reps': 8,
+        'weight_kg': 62.5,
+        'last_performance': 'Last time: 60 kg x 8, 3 days ago',
+      });
+      expect(recItem.exerciseCatalogId, 9);
+      expect(recItem.weightKg, 62.5);
+      expect(recItem.lastPerformance, 'Last time: 60 kg x 8, 3 days ago');
+
+      final catItem = ExerciseCatalogItem.fromJson({
+        'id': 9,
+        'name': 'Bench Press',
+        'category': 'strength',
+        'default_met': 5.0,
+        'equipment': 'barbell',
+        'level': 'intermediate',
+        'is_custom': false,
+        'muscles': [
+          {'muscle_group': 'chest', 'role': 'primary'},
+          {'muscle_group': 'triceps', 'role': 'secondary'},
+        ],
+      });
+      expect(catItem.equipment, 'barbell');
+      expect(catItem.level, 'intermediate');
+      expect(catItem.isCustom, isFalse);
+      expect(catItem.defaultMet, 5.0);
+      expect(catItem.muscles.length, 2);
+      expect(catItem.muscles.first.muscleGroup, 'chest');
+      expect(catItem.muscles.first.role, 'primary');
+
+      const customEx = CustomExerciseInput(
+        name: 'Ring Push-up',
+        category: 'strength',
+        met: 5.2,
+        equipment: 'bodyweight',
+        level: 'intermediate',
+        description: 'Push-ups on gymnastic rings',
+        muscles: [
+          ExerciseMuscle(muscleGroup: 'chest', role: 'primary'),
+          ExerciseMuscle(muscleGroup: 'triceps', role: 'secondary'),
+        ],
+      );
+      expect(customEx.toJson(), {
+        'name': 'Ring Push-up',
+        'category': 'strength',
+        'met': 5.2,
+        'equipment': 'bodyweight',
+        'level': 'intermediate',
+        'description': 'Push-ups on gymnastic rings',
+        'muscles': [
+          {'muscle_group': 'chest', 'role': 'primary'},
+          {'muscle_group': 'triceps', 'role': 'secondary'},
+        ],
+      });
     });
 
     test('missing required id throws FormatException', () {

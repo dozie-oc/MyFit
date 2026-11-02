@@ -263,8 +263,9 @@ class ApiClient {
 
   static Future<List<FoodItem>> getFoods([String? query]) async {
     final params = <String, String>{};
-    if (query != null && query.isNotEmpty) params['q'] = query;
-    final res = await get('/foods${query != null ? '/search' : ''}', params);
+    final hasQuery = query?.trim().isNotEmpty == true;
+    if (hasQuery) params['q'] = query!.trim();
+    final res = await get('/foods${hasQuery ? '/search' : ''}', params);
     return _list(res, FoodItem.fromJson);
   }
 
@@ -421,6 +422,25 @@ class ApiClient {
     return _list(res, ExerciseCatalogItem.fromJson);
   }
 
+  static Future<ExerciseCatalogItem> createCustomExercise(
+      CustomExerciseInput input) async {
+    final res = await post('/exercises/catalog/custom', input.toJson());
+    notifyDataChanged({DataScope.exercises});
+    return ExerciseCatalogItem.fromJson(res as Map<String, dynamic>);
+  }
+
+  static Future<ExerciseCatalogItem> updateCustomExercise(
+      int id, CustomExerciseInput input) async {
+    final res = await patch('/exercises/catalog/custom/$id', input.toJson());
+    notifyDataChanged({DataScope.exercises});
+    return ExerciseCatalogItem.fromJson(res as Map<String, dynamic>);
+  }
+
+  static Future<void> deleteCustomExercise(int id) async {
+    await delete('/exercises/catalog/custom/$id');
+    notifyDataChanged({DataScope.exercises});
+  }
+
   static Future<List<Exercise>> getExercises([String? date]) async {
     final params = <String, String>{};
     if (date != null) params['exercise_date'] = date;
@@ -428,9 +448,32 @@ class ApiClient {
     return _list(res, Exercise.fromJson);
   }
 
-  static Future<void> createExercise(Map<String, dynamic> body) async {
-    await post('/exercises', body);
+  static Future<Exercise> createExercise(Map<String, dynamic> body) async {
+    final res = await post('/exercises', body);
     notifyDataChanged({DataScope.exercises});
+    return Exercise.fromJson(res as Map<String, dynamic>);
+  }
+
+  static Future<ExerciseHistory> getExerciseHistory({
+    int? catalogId,
+    String? name,
+  }) async {
+    final params = <String, String>{};
+    if (catalogId != null) {
+      params['exercise_catalog_id'] = catalogId.toString();
+    }
+    if (name != null && name.trim().isNotEmpty) {
+      params['name'] = name.trim();
+    }
+    final res = await get('/exercises/last', params);
+    return ExerciseHistory.fromJson(res as Map<String, dynamic>);
+  }
+
+  static Future<Exercise> updateExercise(
+      int id, Map<String, dynamic> body) async {
+    final res = await patch('/exercises/$id', body);
+    notifyDataChanged({DataScope.exercises});
+    return Exercise.fromJson(res as Map<String, dynamic>);
   }
 
   static Future<void> deleteExercise(int id) async {

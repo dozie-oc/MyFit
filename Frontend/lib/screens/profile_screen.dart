@@ -834,6 +834,8 @@ class GoalCard extends StatelessWidget {
     final trainingDays = goal.trainingDaysPerWeek;
     final experience = goal.trainingExperience;
     final dietPref = goal.dietaryPreference;
+    final foodsToAvoid = goal.foodsToAvoid;
+    final equipmentList = goal.equipmentList;
     final targetWeight = goal.targetWeight;
 
     final hasGoal = goal.hasGoal;
@@ -894,6 +896,19 @@ class GoalCard extends StatelessWidget {
                           label: 'Diet',
                           value: dietPref[0].toUpperCase() +
                               dietPref.substring(1)),
+                    ],
+                    if (foodsToAvoid != null &&
+                        foodsToAvoid.trim().isNotEmpty) ...[
+                      const Divider(height: 12),
+                      InfoTile(
+                          label: 'Avoiding',
+                          value: foodsToAvoid.trim()),
+                    ],
+                    if (equipmentList.isNotEmpty) ...[
+                      const Divider(height: 12),
+                      InfoTile(
+                          label: 'Equipment',
+                          value: equipmentList.join(', ')),
                     ],
                     if (targetWeight != null) ...[
                       const Divider(height: 12),

@@ -419,7 +419,8 @@ class _GoalScreenState extends State<GoalScreen> {
                 TextField(
                   controller: _avoidCtrl,
                   decoration: const InputDecoration(
-                    hintText: 'e.g. gluten, dairy, nuts',
+                    hintText:
+                        'e.g. peanuts, dairy, shellfish. Related foods like milk or almonds are matched too. This is a preference filter, not an allergy check.',
                   ),
                 ),
 

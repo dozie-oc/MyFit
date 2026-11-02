@@ -1,7 +1,9 @@
-from datetime import date, datetime
+from datetime import date, date as Date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from src.exercise_catalog_data import EQUIPMENT, LEVELS, MUSCLE_GROUPS
 
 
 # ============================================================
@@ -120,6 +122,7 @@ class FoodItemOut(BaseModel):
 
     base_unit: str
     kind: str = "catalog"
+    avoided: bool = False
 
     portions: list[FoodPortionOut] = Field(
         default_factory=list
@@ -542,6 +545,142 @@ class ExerciseCatalogItemOut(BaseModel):
     muscles: list[ExerciseMuscleMappingOut] = []
 
 
+class CustomExerciseMuscleInput(BaseModel):
+    muscle_group: str
+    role: Literal["primary", "secondary"] = "primary"
+
+    @field_validator("muscle_group")
+    @classmethod
+    def _validate_group(cls, value: str) -> str:
+        val = value.strip().lower()
+        if val not in MUSCLE_GROUPS:
+            raise ValueError(f"Unknown muscle group: {value}")
+        return val
+
+
+def _validate_equipment_str(value: str) -> str:
+    tokens = [t.strip().lower() for t in value.split("|") if t.strip()]
+    if not tokens:
+        raise ValueError("Equipment cannot be empty.")
+    vocab = set(EQUIPMENT)
+    for t in tokens:
+        if t not in vocab:
+            raise ValueError(f"Invalid equipment token: {t}")
+    return "|".join(tokens)
+
+
+def _validate_level_str(value: str) -> str:
+    val = value.strip().lower()
+    if val not in LEVELS:
+        raise ValueError(f"Invalid level: {value}")
+    return val
+
+
+def _validate_unique_muscles(
+    muscles: list[CustomExerciseMuscleInput],
+) -> list[CustomExerciseMuscleInput]:
+    if len(muscles) > 6:
+        raise ValueError("At most 6 muscle mappings are allowed.")
+    seen: set[str] = set()
+    for m in muscles:
+        if m.muscle_group in seen:
+            raise ValueError(f"Duplicate muscle group: {m.muscle_group}")
+        seen.add(m.muscle_group)
+    return muscles
+
+
+class CustomExerciseCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    category: Literal["strength", "cardio", "flexibility"]
+    met: float | None = Field(default=None, ge=0.8, le=20.0)
+    equipment: str = "bodyweight"
+    level: str = "intermediate"
+    description: str | None = Field(default=None, max_length=500)
+    muscles: list[CustomExerciseMuscleInput] = Field(default_factory=list, max_length=6)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        val = value.strip()
+        if not val:
+            raise ValueError("Exercise name cannot be blank.")
+        return val
+
+    @field_validator("equipment")
+    @classmethod
+    def _check_equip(cls, value: str) -> str:
+        return _validate_equipment_str(value)
+
+    @field_validator("level")
+    @classmethod
+    def _check_level(cls, value: str) -> str:
+        return _validate_level_str(value)
+
+    @field_validator("muscles")
+    @classmethod
+    def _check_muscles(
+        cls, value: list[CustomExerciseMuscleInput]
+    ) -> list[CustomExerciseMuscleInput]:
+        return _validate_unique_muscles(value)
+
+    @model_validator(mode="after")
+    def _check_category_muscles(self):
+        if self.category == "strength":
+            if not any(m.role == "primary" for m in self.muscles):
+                raise ValueError(
+                    "Strength exercises require at least one primary muscle group."
+                )
+        else:
+            if self.muscles:
+                raise ValueError(
+                    "Cardio and flexibility exercises cannot have muscle mappings."
+                )
+        return self
+
+
+class CustomExerciseUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    category: Literal["strength", "cardio", "flexibility"] | None = None
+    met: float | None = Field(default=None, ge=0.8, le=20.0)
+    equipment: str | None = None
+    level: str | None = None
+    description: str | None = Field(default=None, max_length=500)
+    muscles: list[CustomExerciseMuscleInput] | None = Field(default=None, max_length=6)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: str | None) -> str | None:
+        if value is not None:
+            val = value.strip()
+            if not val:
+                raise ValueError("Exercise name cannot be blank.")
+            return val
+        return value
+
+    @field_validator("equipment")
+    @classmethod
+    def _check_equip(cls, value: str | None) -> str | None:
+        if value is not None:
+            return _validate_equipment_str(value)
+        return value
+
+    @field_validator("level")
+    @classmethod
+    def _check_level(cls, value: str | None) -> str | None:
+        if value is not None:
+            return _validate_level_str(value)
+        return value
+
+    @field_validator("muscles")
+    @classmethod
+    def _check_muscles(
+        cls, value: list[CustomExerciseMuscleInput] | None
+    ) -> list[CustomExerciseMuscleInput] | None:
+        if value is not None:
+            return _validate_unique_muscles(value)
+        return value
+
+
 class ExerciseLogCreate(BaseModel):
     """
     Input for recording exercise.
@@ -607,6 +746,32 @@ class ExerciseLogCreate(BaseModel):
         return value.strip()
 
 
+class ExerciseLogUpdate(BaseModel):
+    """Input for updating an existing exercise log."""
+
+    date: Date | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    category: str | None = Field(default=None, max_length=50)
+    exercise_catalog_id: int | None = None
+    sets: int | None = Field(default=None, ge=0)
+    reps: int | None = Field(default=None, ge=0)
+    weight_kg: float | None = Field(default=None, ge=0)
+    duration_minutes: int | None = Field(default=None, gt=0)
+    distance_km: float | None = Field(default=None, ge=0)
+    intensity: str | None = Field(default=None, max_length=20)
+    rir: int | None = Field(default=None, ge=0, le=10)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is not None:
+            val = value.strip()
+            if not val:
+                raise ValueError("Exercise name cannot be blank.")
+            return val
+        return value
+
+
 class ExerciseOut(BaseModel):
     """Public representation of a logged exercise."""
 
@@ -625,25 +790,16 @@ class ExerciseOut(BaseModel):
     intensity: str | None = None
     rir: int | None = None
     calories_burned: float
+    is_pr: bool = False
 
 
-# ============================================================
-# EXERCISE CATALOG MUSCLE MAPPING
-# ============================================================
+class ExerciseHistoryOut(BaseModel):
+    """History and personal best summary for an exercise."""
 
-
-class ExerciseCatalogItemDetailOut(BaseModel):
-    """Extended catalog item including muscle mappings."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    name: str
-    category: str
-    default_met: float
-    description: str | None = None
-    is_custom: bool = False
-    muscle_mappings: list[ExerciseMuscleMappingOut] = Field(default_factory=list)
+    last: ExerciseOut | None = None
+    best_weight_kg: float | None = None
+    best_est_1rm: float | None = None
+    times_logged: int = 0
 
 
 # ============================================================
@@ -659,6 +815,12 @@ class MuscleGroupStatus(BaseModel):
     sets_completed: float
     target_min: float
     target_max: float
+
+
+class CardioWeekOut(BaseModel):
+    minutes: float = 0.0
+    target_minutes: int = 90
+    status: str = "low"
 
 
 class TrainingAdequacyResponse(BaseModel):
@@ -692,6 +854,8 @@ class TrainingAdequacyResponse(BaseModel):
 
     # Total sets logged today across all muscle groups
     total_sets_today: float = 0
+
+    cardio_week: CardioWeekOut = Field(default_factory=CardioWeekOut)
 
 
 # ============================================================
@@ -770,6 +934,8 @@ class RecommendationItem(BaseModel):
     category: str | None = None
     sets: int | None = None
     reps: int | None = None
+    weight_kg: float | None = None
+    last_performance: str | None = None
     duration_minutes: int | None = None
     description: str | None = None
 

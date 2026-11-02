@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
+import 'custom_exercise_screen.dart';
 import 'recommendation_sheet.dart';
 import '../main.dart' show TabActivatedNotifier;
 
@@ -161,6 +163,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                     itemBuilder: (_, i) => _ExerciseCard(
                       exercise: exercises[i],
                       onDeleted: _reload,
+                      onEdited: _reload,
                     ),
                   ),
                 );
@@ -198,8 +201,12 @@ class _CategoryFilterChip extends StatelessWidget {
 class _ExerciseCard extends StatelessWidget {
   final Exercise exercise;
   final VoidCallback onDeleted;
-  const _ExerciseCard(
-      {required this.exercise, required this.onDeleted});
+  final VoidCallback? onEdited;
+  const _ExerciseCard({
+    required this.exercise,
+    required this.onDeleted,
+    this.onEdited,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -301,15 +308,40 @@ class _ExerciseCard extends StatelessWidget {
                           fontWeight: FontWeight.w600,
                           color: Color(0xFFEF4444))),
                   const SizedBox(height: 4),
-                  GestureDetector(
-                    onTap: () async {
-                      try {
-                        await ApiClient.deleteExercise(exercise.id);
-                        onDeleted();
-                      } catch (_) {}
-                    },
-                    child: const Icon(Icons.delete_outline,
-                        size: 18, color: Color(0xFF9CA3AF)),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      GestureDetector(
+                        onTap: () async {
+                          final updated = await showModalBottomSheet<bool>(
+                            context: context,
+                            isScrollControlled: true,
+                            shape: const RoundedRectangleBorder(
+                              borderRadius: BorderRadius.vertical(
+                                  top: Radius.circular(16)),
+                            ),
+                            builder: (_) =>
+                                _LogExerciseSheet(existing: exercise),
+                          );
+                          if (updated == true) {
+                            (onEdited ?? onDeleted)();
+                          }
+                        },
+                        child: const Icon(Icons.edit_outlined,
+                            size: 18, color: Color(0xFF9CA3AF)),
+                      ),
+                      const SizedBox(width: 10),
+                      GestureDetector(
+                        onTap: () async {
+                          try {
+                            await ApiClient.deleteExercise(exercise.id);
+                            onDeleted();
+                          } catch (_) {}
+                        },
+                        child: const Icon(Icons.delete_outline,
+                            size: 18, color: Color(0xFF9CA3AF)),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -326,7 +358,8 @@ class _ExerciseCard extends StatelessWidget {
 // ─────────────────────────────────────────
 
 class _LogExerciseSheet extends StatefulWidget {
-  const _LogExerciseSheet();
+  final Exercise? existing;
+  const _LogExerciseSheet({this.existing});
 
   @override
   State<_LogExerciseSheet> createState() => _LogExerciseSheetState();
@@ -348,6 +381,8 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
   String _intensity = 'moderate'; // 'low', 'moderate', 'high'
   int? _selectedCatalogId;
   List<ExerciseCatalogItem> _catalog = [];
+  Timer? _historyDebounce;
+  ExerciseHistory? _history;
 
   DateTime _date = DateTime.now();
   bool _saving = false;
@@ -355,10 +390,34 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
   @override
   void initState() {
     super.initState();
-    // Strength defaults — only populated when category = strength
-    _setsCtrl.text = '3';
-    _repsCtrl.text = '10';
+    final ex = widget.existing;
+    if (ex != null) {
+      _nameCtrl.text = ex.name;
+      _category = ex.category.isNotEmpty ? ex.category.toLowerCase() : 'strength';
+      _selectedCatalogId = ex.exerciseCatalogId;
+      if (ex.sets != null) _setsCtrl.text = ex.sets.toString();
+      if (ex.reps != null) _repsCtrl.text = ex.reps.toString();
+      if (ex.weightKg != null) _weightCtrl.text = ex.weightKg.toString();
+      if (ex.durationMinutes != null) {
+        _minsCtrl.text = ex.durationMinutes.toString();
+      }
+      if (ex.distanceKm != null) _distCtrl.text = ex.distanceKm.toString();
+      if (ex.intensity != null && ex.intensity!.isNotEmpty) {
+        _intensity = ex.intensity!;
+      }
+      if (ex.rir != null) _rirCtrl.text = ex.rir.toString();
+      final parsedDate = DateTime.tryParse(ex.date);
+      if (parsedDate != null) _date = parsedDate;
+    } else {
+      // Strength defaults — only populated when category = strength
+      _setsCtrl.text = '3';
+      _repsCtrl.text = '10';
+    }
+    _nameCtrl.addListener(_onNameChanged);
     _loadCatalog();
+    if (ex != null && _category == 'strength') {
+      _fetchHistory(catalogId: _selectedCatalogId, name: ex.name);
+    }
   }
 
   Future<void> _loadCatalog() async {
@@ -368,8 +427,90 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
     } catch (_) {}
   }
 
+  void _onNameChanged() {
+    final text = _nameCtrl.text.trim();
+    if (_selectedCatalogId != null) {
+      final match = _catalog.where((c) => c.id == _selectedCatalogId).firstOrNull;
+      if (match != null && match.name.toLowerCase() != text.toLowerCase()) {
+        _selectedCatalogId = null;
+      }
+    }
+    _historyDebounce?.cancel();
+    if (_category != 'strength' || text.length < 3) {
+      if (_history != null && mounted) {
+        setState(() => _history = null);
+      }
+      return;
+    }
+    _historyDebounce = Timer(const Duration(milliseconds: 500), () {
+      _fetchHistory(catalogId: _selectedCatalogId, name: text);
+    });
+  }
+
+  Future<void> _fetchHistory({int? catalogId, required String name}) async {
+    final queryName = name.trim();
+    if (_category != 'strength' || queryName.isEmpty) return;
+    try {
+      final hist = await ApiClient.getExerciseHistory(
+        catalogId: catalogId,
+        name: queryName,
+      );
+      if (!mounted) return;
+      if (_nameCtrl.text.trim().toLowerCase() != queryName.toLowerCase()) {
+        return;
+      }
+      setState(() => _history = hist);
+    } catch (_) {}
+  }
+
+  String _formatHistorySummary(ExerciseHistory hist) {
+    final last = hist.last!;
+    final parts = <String>[];
+    final wStr = last.weightKg != null && last.weightKg! > 0
+        ? '${last.weightKg! % 1 == 0 ? last.weightKg!.toInt() : last.weightKg} kg'
+        : 'bodyweight';
+    final rStr = last.reps != null ? ' x ${last.reps}' : '';
+    final sStr = last.sets != null ? ' x ${last.sets}' : '';
+    parts.add('Last: $wStr$rStr$sStr');
+
+    final parsed = DateTime.tryParse(last.date);
+    if (parsed != null) {
+      final today = DateTime.now();
+      final todayDate = DateTime(today.year, today.month, today.day);
+      final logDate = DateTime(parsed.year, parsed.month, parsed.day);
+      final diff = todayDate.difference(logDate).inDays;
+      if (diff <= 0) {
+        parts.add('today');
+      } else if (diff == 1) {
+        parts.add('1 day ago');
+      } else {
+        parts.add('$diff days ago');
+      }
+    }
+
+    if (hist.bestEst1rm != null && hist.bestEst1rm! > 0) {
+      final rm = hist.bestEst1rm! % 1 == 0
+          ? hist.bestEst1rm!.toInt().toString()
+          : hist.bestEst1rm!.toStringAsFixed(1);
+      parts.add('Best est. 1RM $rm kg');
+    }
+    return parts.join(' - ');
+  }
+
+  void _applyLastHistory() {
+    final last = _history?.last;
+    if (last == null) return;
+    setState(() {
+      if (last.sets != null) _setsCtrl.text = last.sets.toString();
+      if (last.reps != null) _repsCtrl.text = last.reps.toString();
+      if (last.weightKg != null) _weightCtrl.text = last.weightKg.toString();
+    });
+  }
+
   @override
   void dispose() {
+    _historyDebounce?.cancel();
+    _nameCtrl.removeListener(_onNameChanged);
     _nameCtrl.dispose();
     _minsCtrl.dispose();
     _setsCtrl.dispose();
@@ -428,6 +569,73 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
       _selectedCatalogId = item.id;
       _nameCtrl.text = item.name;
     });
+    if (cat == 'strength') {
+      _historyDebounce?.cancel();
+      _fetchHistory(catalogId: item.id, name: item.name);
+    }
+  }
+
+  Future<void> _openCreateCustomExercise() async {
+    final created = await Navigator.push<ExerciseCatalogItem>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CustomExerciseScreen(
+          initialName: _nameCtrl.text.trim(),
+          initialCategory: _category == 'other' ? 'strength' : _category,
+        ),
+      ),
+    );
+    if (created != null && mounted) {
+      await _loadCatalog();
+      _selectCatalogItem(created);
+    }
+  }
+
+  Future<void> _showCustomItemActions(ExerciseCatalogItem item) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Edit custom exercise'),
+              onTap: () => Navigator.pop(ctx, 'edit'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Colors.red),
+              title: const Text('Delete custom exercise',
+                  style: TextStyle(color: Colors.red)),
+              onTap: () => Navigator.pop(ctx, 'delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    if (action == 'edit') {
+      final updated = await Navigator.push<ExerciseCatalogItem>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CustomExerciseScreen(existing: item),
+        ),
+      );
+      if (updated != null && mounted) {
+        await _loadCatalog();
+        _selectCatalogItem(updated);
+      }
+    } else if (action == 'delete') {
+      try {
+        await ApiClient.deleteCustomExercise(item.id);
+        if (mounted) {
+          if (_selectedCatalogId == item.id) {
+            setState(() => _selectedCatalogId = null);
+          }
+          await _loadCatalog();
+        }
+      } catch (_) {}
+    }
   }
 
   Future<void> _save() async {
@@ -466,8 +674,20 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
         'intensity': _intensity,
         if (rirVal != null) 'rir': rirVal,
       };
-      await ApiClient.createExercise(body);
-      if (mounted) Navigator.pop(context, true);
+      final Exercise saved;
+      if (widget.existing != null) {
+        saved = await ApiClient.updateExercise(widget.existing!.id, body);
+      } else {
+        saved = await ApiClient.createExercise(body);
+      }
+      if (mounted) {
+        if (saved.isPr) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('New personal best')),
+          );
+        }
+        Navigator.pop(context, true);
+      }
     } on ApiException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -508,8 +728,9 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
               ),
             ),
             const SizedBox(height: 16),
-            const Text('Log Exercise',
-                style: TextStyle(
+            Text(
+                widget.existing != null ? 'Edit exercise' : 'Log Exercise',
+                style: const TextStyle(
                     fontSize: 18, fontWeight: FontWeight.w600)),
             const SizedBox(height: 16),
 
@@ -552,20 +773,64 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
-                children: filteredCatalog.take(8).map((catItem) {
+                children: [
+                  ...filteredCatalog.where((it) => it.isCustom),
+                  ...filteredCatalog.where((it) => !it.isCustom).take(8),
+                ].map((catItem) {
                   final isSelected = _nameCtrl.text == catItem.name;
-                  return ActionChip(
+                  final chip = ActionChip(
                     avatar: isSelected
                         ? const Icon(Icons.check, size: 14)
                         : null,
-                    label: Text(catItem.name,
-                        style: const TextStyle(fontSize: 12)),
+                    label: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(catItem.name,
+                            style: const TextStyle(fontSize: 12)),
+                        if (catItem.isCustom) ...[
+                          const SizedBox(width: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE0E7FF),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'Custom',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF4338CA),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                     onPressed: () => _selectCatalogItem(catItem),
                   );
+                  if (catItem.isCustom) {
+                    return GestureDetector(
+                      onLongPress: () => _showCustomItemActions(catItem),
+                      child: chip,
+                    );
+                  }
+                  return chip;
                 }).toList(),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
             ],
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _openCreateCustomExercise,
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text("Can't find it? Create your own",
+                    style: TextStyle(fontSize: 12)),
+              ),
+            ),
+            const SizedBox(height: 8),
 
             TextField(
               controller: _nameCtrl,
@@ -574,6 +839,32 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
                 hintText: 'e.g. Bench Press, Running, Yoga',
               ),
             ),
+            if (isStrength && _history != null && _history!.last != null) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _formatHistorySummary(_history!),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _applyLastHistory,
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: const Size(0, 28),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Use last',
+                        style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 16),
 
             // ── STRENGTH fields ───────────────────
@@ -744,7 +1035,9 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
                         height: 18,
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.white))
-                    : const Text('Log Workout'),
+                    : Text(widget.existing != null
+                        ? 'Save Changes'
+                        : 'Log Workout'),
               ),
             ),
             const SizedBox(height: 16),
@@ -907,6 +1200,13 @@ class _TrainingAdequacyBannerState extends State<_TrainingAdequacyBanner> {
                                     color: Color(0xFF9CA3AF),
                                   ),
                                 ),
+                              Text(
+                                'Cardio this week: ${data.cardioWeek.minutes.toStringAsFixed(0)} / ${data.cardioWeek.targetMinutes} min',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Color(0xFF6B7280),
+                                ),
+                              ),
                             ],
                           ),
                         ),

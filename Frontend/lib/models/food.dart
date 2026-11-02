@@ -40,6 +40,7 @@ class FoodItem {
   final double fatPer100g;
   final String baseUnit;
   final String kind;
+  final bool avoided;
   final List<FoodPortion> portions;
 
   const FoodItem({
@@ -53,6 +54,7 @@ class FoodItem {
     required this.fatPer100g,
     this.baseUnit = 'g',
     this.kind = 'catalog',
+    this.avoided = false,
     this.portions = const [],
   });
 
@@ -70,6 +72,7 @@ class FoodItem {
       fatPer100g: (json['fat_per_100g'] as num?)?.toDouble() ?? 0.0,
       baseUnit: json['base_unit'] as String? ?? 'g',
       kind: json['kind'] as String? ?? 'catalog',
+      avoided: json['avoided'] == true,
       portions: (json['portions'] as List<dynamic>?)
               ?.map((e) => FoodPortion.fromJson(e as Map<String, dynamic>))
               .toList() ??

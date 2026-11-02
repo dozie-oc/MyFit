@@ -8,8 +8,9 @@ and today's exercises, then returns a single actionable recommendation
 No LLM, no ML model. Pure deterministic rule-based logic.
 """
 
-from datetime import date as Date, datetime, timedelta, timezone
+from datetime import date as Date, timedelta
 import zlib
+from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
 from src.models import (
@@ -22,6 +23,7 @@ from src.models import (
 )
 from src.schemas import RecommendationItem, RecommendationResponse
 from src.services.exercise_access import visible_exercise
+from src.services.food_access import _word_in_text, matches_avoid, parse_avoid_terms
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -121,24 +123,10 @@ def _nutrition_per_grams(food: FoodItem, grams: float) -> dict[str, float]:
     }
 
 
-def _word_in_text(word: str, text: str) -> bool:
-    """
-    Return True if `word` appears as a whole token in `text`.
-    Tokens are separated by any non-alphanumeric character.
-    e.g. 'butter' in 'peanut butter' -> True
-         'butter' in 'buttermilk'    -> False
-    """
-    import re
-    pattern = r'(?<![\w])' + re.escape(word) + r'(?![\w])'
-    return bool(re.search(pattern, text))
-
-
 def _is_food_allowed(food_name: str, dietary_pref: str, avoid_list: list[str]) -> bool:
     lower = food_name.lower()
-    # Avoid list: match each avoid term as a whole word/token
-    for avoid in avoid_list:
-        if _word_in_text(avoid.strip(), lower):
-            return False
+    if matches_avoid(lower, avoid_list):
+        return False
 
     if dietary_pref == "vegan":
         animal_keywords = MEAT_POULTRY_KEYWORDS | SEAFOOD_KEYWORDS | DAIRY_EGG_KEYWORDS
@@ -194,8 +182,7 @@ def _recommend_meal(
     next_meal = _determine_next_meal_type(today_meals)
     goal_type = (goal.goal_type if goal else None) or "maintain_weight"
     dietary_pref = (goal.dietary_preference or "").lower().strip() if goal else ""
-    avoid_str = (goal.foods_to_avoid or "").lower() if goal else ""
-    avoid_list = [a.strip() for a in avoid_str.split(",") if a.strip()]
+    avoid_list = parse_avoid_terms(goal.foods_to_avoid if goal else "")
 
     # Load all available active foods
     all_foods: list[FoodItem] = session.exec(
@@ -622,6 +609,7 @@ def _recommend_exercise_with_adequacy(
         get_muscle_mappings,
         _get_relevant_muscles_for_split,
         CARDIO_PRIMARY_GOALS,
+        CARDIO_SECONDARY_GOALS,
     )
 
     mappings_by_catalog_id = get_muscle_mappings(session)
@@ -683,6 +671,14 @@ def _recommend_exercise_with_adequacy(
         if goal_type in CARDIO_PRIMARY_GOALS and item.category == "cardio":
             cat_bonus = -40
 
+        if (
+            goal_type in (CARDIO_PRIMARY_GOALS | CARDIO_SECONDARY_GOALS)
+            and getattr(adequacy, "cardio_week", None) is not None
+            and adequacy.cardio_week.status != "met"
+            and item.category == "cardio"
+        ):
+            cat_bonus -= 15
+
         # Penalise exercises with no muscle mappings slightly —
         # we can't guarantee they target what's needed
         if not has_mappings and item.category == "strength":
@@ -721,6 +717,8 @@ def _recommend_exercise_with_adequacy(
     sets: int | None = None
     reps: int | None = None
     duration: int | None = None
+    suggested_weight: float | None = None
+    last_perf: str | None = None
 
     if pick.category == "strength":
         if experience == "beginner":
@@ -729,6 +727,48 @@ def _recommend_exercise_with_adequacy(
             sets, reps = 4, 8
         else:
             sets, reps = 5, 5
+
+        match_cond = (
+            or_(
+                Exercise.exercise_catalog_id == pick.id,
+                func.lower(Exercise.name) == pick.name.lower(),
+            )
+            if pick.id is not None
+            else (func.lower(Exercise.name) == pick.name.lower())
+        )
+        last_weighted = session.exec(
+            select(Exercise)
+            .where(
+                Exercise.user_id == user.id,
+                Exercise.deleted_at.is_(None),
+                match_cond,
+                Exercise.weight_kg.is_not(None),
+                Exercise.weight_kg > 0,
+            )
+            .order_by(Exercise.date.desc(), Exercise.id.desc())
+        ).first()
+        if last_weighted is not None and last_weighted.weight_kg is not None:
+            target_reps = reps or 8
+            if (
+                last_weighted.reps is not None
+                and last_weighted.reps >= target_reps
+                and (last_weighted.rir is None or last_weighted.rir >= 1)
+            ):
+                raw_w = last_weighted.weight_kg + 2.5
+            else:
+                raw_w = last_weighted.weight_kg
+            suggested_weight = round(raw_w * 2.0) / 2.0
+            days_ago = (today - last_weighted.date).days
+            if days_ago <= 0:
+                when_str = "today"
+            elif days_ago == 1:
+                when_str = "1 day ago"
+            else:
+                when_str = f"{days_ago} days ago"
+            last_perf = (
+                f"Last time: {last_weighted.weight_kg:g} kg x "
+                f"{last_weighted.reps or 0}, {when_str}"
+            )
     elif pick.category == "cardio":
         if experience == "beginner":
             duration = 20
@@ -745,13 +785,18 @@ def _recommend_exercise_with_adequacy(
         category=pick.category,
         sets=sets,
         reps=reps,
+        weight_kg=suggested_weight,
+        last_performance=last_perf,
         duration_minutes=duration,
         description=pick.description,
     )
 
     detail_parts = []
     if sets and reps:
-        detail_parts.append(f"{sets} sets × {reps} reps")
+        if suggested_weight is not None:
+            detail_parts.append(f"{sets} sets × {reps} reps @ {suggested_weight:g} kg")
+        else:
+            detail_parts.append(f"{sets} sets × {reps} reps")
     if duration:
         detail_parts.append(f"{duration} minutes")
     detail_str = " · ".join(detail_parts)
@@ -782,6 +827,8 @@ def _recommend_exercise_with_adequacy(
 
     if detail_str:
         reason += f". Suggested: {detail_str}."
+    if last_perf:
+        reason += f" ({last_perf})."
 
     return RecommendationResponse(
         has_recommendation=True,

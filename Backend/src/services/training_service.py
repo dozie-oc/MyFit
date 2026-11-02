@@ -163,6 +163,20 @@ CARDIO_PRIMARY_GOALS = {"improve_endurance"}
 CARDIO_SECONDARY_GOALS = {"lose_weight", "improve_fitness", "maintain_weight"}
 STRENGTH_PRIMARY_GOALS = {"build_muscle", "get_stronger", "gain_weight"}
 
+CARDIO_EQUIV: dict[str, float] = {
+    "low": 0.5,
+    "moderate": 1.0,
+    "high": 2.0,
+}
+
+WEEKLY_CARDIO_TARGET_MIN: dict[str, int] = {
+    "improve_endurance": 180,
+    "lose_weight": 150,
+    "improve_fitness": 150,
+    "maintain_weight": 120,
+}
+DEFAULT_WEEKLY_CARDIO_TARGET_MIN = 90
+
 # ──────────────────────────────────────────────────────────────────────
 # SESSION-LEVEL CAPS (safety thresholds, not sole adequacy criteria)
 # ──────────────────────────────────────────────────────────────────────
@@ -189,7 +203,6 @@ class MuscleVolume:
     """Accumulated training volume for a single muscle group."""
     muscle_group: str
     effective_sets: float = 0.0
-    raw_sets: float = 0.0
     target_min: float = 0.0
     target_max: float = 0.0
 
@@ -250,6 +263,14 @@ class WeeklyProgress:
 
 
 @dataclass
+class CardioWeek:
+    """Weekly cardio progress (Monday through today)."""
+    minutes: float = 0.0
+    target_minutes: int = DEFAULT_WEEKLY_CARDIO_TARGET_MIN
+    status: str = "low"  # "low" | "building" | "met"
+
+
+@dataclass
 class TrainingAdequacy:
     """Complete training adequacy evaluation result."""
     overall_status: str = "insufficient"  # insufficient | adequate | high
@@ -264,6 +285,7 @@ class TrainingAdequacy:
     # New: separated sub-evaluations
     session_adequacy: SessionAdequacy = field(default_factory=SessionAdequacy)
     weekly_progress: WeeklyProgress = field(default_factory=WeeklyProgress)
+    cardio_week: CardioWeek = field(default_factory=CardioWeek)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -867,7 +889,6 @@ def evaluate_weekly_progress(
         mv = MuscleVolume(
             muscle_group=mg,
             effective_sets=round(weekly_volume.get(mg, 0.0), 1),
-            raw_sets=round(weekly_volume.get(mg, 0.0), 1),
             target_min=t_min,
             target_max=t_max,
         )
@@ -1040,6 +1061,28 @@ def evaluate_training_adequacy(
         today=today,
     )
 
+    goal_type = (goal.goal_type if goal else None) or "improve_fitness"
+    cardio_target = WEEKLY_CARDIO_TARGET_MIN.get(
+        goal_type.lower(), DEFAULT_WEEKLY_CARDIO_TARGET_MIN
+    )
+    cardio_mins = 0.0
+    for ex in week_exercises:
+        if (ex.category or "").lower() == "cardio" and ex.duration_minutes and ex.duration_minutes > 0:
+            mult = CARDIO_EQUIV.get((ex.intensity or "moderate").lower(), 1.0)
+            cardio_mins += ex.duration_minutes * mult
+    cardio_mins = round(cardio_mins, 1)
+    if cardio_mins >= cardio_target:
+        cardio_status = "met"
+    elif cardio_mins >= cardio_target * 0.5:
+        cardio_status = "building"
+    else:
+        cardio_status = "low"
+    cardio_week = CardioWeek(
+        minutes=cardio_mins,
+        target_minutes=cardio_target,
+        status=cardio_status,
+    )
+
     # ── COMBINE INTO SESSION ACTION ──────────────────────────────
     # These two evaluations inform each other but are NOT equivalent.
     session_action = _determine_session_action(
@@ -1082,6 +1125,7 @@ def evaluate_training_adequacy(
         detected_split=detected_split,
         session_adequacy=sess_adequacy,
         weekly_progress=weekly,
+        cardio_week=cardio_week,
     )
 
 

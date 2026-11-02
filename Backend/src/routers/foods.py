@@ -6,7 +6,7 @@ from sqlmodel import select
 
 from src.config import settings
 from src.dependencies import CurrentUserDep, SessionDep
-from src.models import FoodItem, FoodPortion
+from src.models import FoodItem, FoodPortion, UserGoal
 from src.schemas import (
     CustomFoodCreate,
     CustomFoodUpdate,
@@ -15,7 +15,12 @@ from src.schemas import (
     FoodSearchResult,
     PersonalPortionCreate,
 )
-from src.services.food_access import visible_food, visible_portion
+from src.services.food_access import (
+    matches_avoid,
+    parse_avoid_terms,
+    visible_food,
+    visible_portion,
+)
 from src.services.food_service import FoodService
 from src.services.usda_client import (
     USDAAPIError,
@@ -66,6 +71,14 @@ def build_food_responses(
     for portion in portions:
         portions_by_food.setdefault(portion.food_id, []).append(portion)
 
+    avoid_terms: list[str] = []
+    if user_id is not None:
+        goal = session.exec(
+            select(UserGoal).where(UserGoal.user_id == user_id)
+        ).first()
+        if goal and goal.foods_to_avoid:
+            avoid_terms = parse_avoid_terms(goal.foods_to_avoid)
+
     return [
         FoodItemOut(
             id=food.id,
@@ -78,6 +91,7 @@ def build_food_responses(
             fat_per_100g=food.fat_per_100g,
             base_unit=food.base_unit,
             kind=food.kind,
+            avoided=matches_avoid(food.name, avoid_terms) if avoid_terms else False,
             portions=[
                 FoodPortionOut.model_validate(portion)
                 for portion in portions_by_food.get(food.id, [])
@@ -178,12 +192,20 @@ def search_local_foods(
             detail="Search query cannot be empty.",
         )
 
+    escaped = (
+        query.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    pattern = f"%{escaped}%"
+
     statement = (
         select(FoodItem)
         .where(
             *visible_food(current_user.id),
             FoodItem.name.ilike(
-                f"%{query}%"
+                pattern,
+                escape="\\",
             ),
         )
         .order_by(FoodItem.name)
@@ -206,12 +228,12 @@ def validate_per_100g_density(
 ) -> None:
     if calories_per_100g > 900:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"{detail_prefix}: calories per 100g cannot exceed 900 kcal.",
         )
     if protein_per_100g + carbs_per_100g + fat_per_100g > 100.5:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"{detail_prefix}: protein + carbs + fat cannot exceed 100g per 100g.",
         )
 
@@ -768,7 +790,7 @@ async def import_usda_food(
         session.rollback()
 
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 

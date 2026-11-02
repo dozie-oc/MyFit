@@ -422,6 +422,7 @@ class _RecommendationContent extends StatelessWidget {
             'exercise_catalog_id': item.exerciseCatalogId,
           if (sets != null) 'sets': sets,
           if (reps != null) 'reps': reps,
+          if (item.weightKg != null) 'weight_kg': item.weightKg,
           if (duration != null) 'duration_minutes': duration,
           'intensity': 'moderate',
         });
@@ -664,10 +665,20 @@ class _ItemCard extends StatelessWidget {
               children: [
                 if (sets != null && reps != null)
                   _Badge(label: '$sets × $reps reps'),
+                if (item.weightKg != null)
+                  _Badge(label: '@ ${item.weightKg} kg'),
                 if (duration != null)
                   _Badge(label: '$duration min'),
               ],
             ),
+            if (item.lastPerformance != null &&
+                item.lastPerformance!.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                item.lastPerformance!,
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+              ),
+            ],
           ],
         ],
       ),

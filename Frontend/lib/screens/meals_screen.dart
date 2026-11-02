@@ -5,6 +5,7 @@ import '../services/api_client.dart';
 import '../theme.dart';
 import 'custom_food_screen.dart';
 import 'recommendation_sheet.dart';
+import '../widgets/food_picker_sheet.dart';
 import '../main.dart' show TabActivatedNotifier;
 
 // ─────────────────────────────────────────

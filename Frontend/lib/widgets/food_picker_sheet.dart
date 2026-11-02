@@ -87,7 +87,28 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
     super.dispose();
   }
 
-  void _selectFood(FoodItem f) {
+  Future<void> _selectFood(FoodItem f) async {
+    if (f.avoided) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Food to avoid'),
+          content: const Text(
+              'You listed this as a food to avoid. Add anyway?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Add anyway'),
+            ),
+          ],
+        ),
+      );
+      if (proceed != true || !mounted) return;
+    }
     setState(() {
       _selected = f;
       _selectedPortion = f.portions.isNotEmpty ? f.portions.first : null;
@@ -325,10 +346,35 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
                     return ListTile(
                       dense: true,
                       selected: isSelected,
-                      title: Text(f.name,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 13)),
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(f.name,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 13)),
+                          ),
+                          if (f.avoided) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFEF2F2),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text(
+                                'Avoid',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFFDC2626),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
                       onTap: () => _selectFood(f),
                       trailing: isSelected
                           ? const Icon(Icons.check,
@@ -423,3 +469,4 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
     );
   }
 }
+

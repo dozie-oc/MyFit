@@ -12,6 +12,7 @@ class Exercise {
   final String? intensity;
   final int? rir;
   final double caloriesBurned;
+  final bool isPr;
 
   const Exercise({
     required this.id,
@@ -27,6 +28,7 @@ class Exercise {
     this.intensity,
     this.rir,
     required this.caloriesBurned,
+    this.isPr = false,
   });
 
   factory Exercise.fromJson(Map<String, dynamic> json) {
@@ -46,6 +48,31 @@ class Exercise {
       intensity: json['intensity'] as String?,
       rir: (json['rir'] as num?)?.toInt(),
       caloriesBurned: (json['calories_burned'] as num?)?.toDouble() ?? 0.0,
+      isPr: json['is_pr'] as bool? ?? false,
+    );
+  }
+}
+
+class ExerciseHistory {
+  final Exercise? last;
+  final double? bestWeightKg;
+  final double? bestEst1rm;
+  final int timesLogged;
+
+  const ExerciseHistory({
+    this.last,
+    this.bestWeightKg,
+    this.bestEst1rm,
+    this.timesLogged = 0,
+  });
+
+  factory ExerciseHistory.fromJson(Map<String, dynamic> json) {
+    final lastRaw = json['last'];
+    return ExerciseHistory(
+      last: lastRaw is Map<String, dynamic> ? Exercise.fromJson(lastRaw) : null,
+      bestWeightKg: (json['best_weight_kg'] as num?)?.toDouble(),
+      bestEst1rm: (json['best_est_1rm'] as num?)?.toDouble(),
+      timesLogged: (json['times_logged'] as num?)?.toInt() ?? 0,
     );
   }
 }

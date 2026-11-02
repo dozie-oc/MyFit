@@ -5,6 +5,7 @@ from sqlmodel import Session, select
 
 from src.models import FoodItem, FoodPortion
 from src.schemas import FoodSearchResult
+from src.services.food_access import visible_portion
 from src.services.usda_client import USDAClient
 
 
@@ -492,8 +493,6 @@ class FoodService:
         portion_id: int,
         user_id: int | None = None,
     ) -> FoodPortion | None:
-        from src.services.food_access import visible_portion
-
         conds = [
             FoodPortion.id == portion_id,
             FoodPortion.food_id == food_id,

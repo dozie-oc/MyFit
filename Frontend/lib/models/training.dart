@@ -13,6 +13,43 @@ class ExerciseMuscle {
       role: json['role'] as String? ?? 'primary',
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'muscle_group': muscleGroup,
+        'role': role,
+      };
+}
+
+class CustomExerciseInput {
+  final String name;
+  final String category;
+  final double? met;
+  final String equipment;
+  final String level;
+  final String? description;
+  final List<ExerciseMuscle> muscles;
+
+  const CustomExerciseInput({
+    required this.name,
+    required this.category,
+    this.met,
+    this.equipment = 'bodyweight',
+    this.level = 'intermediate',
+    this.description,
+    this.muscles = const [],
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'name': name,
+      'category': category,
+      if (met != null) 'met': met,
+      'equipment': equipment,
+      'level': level,
+      if (description != null) 'description': description,
+      'muscles': muscles.map((m) => m.toJson()).toList(),
+    };
+  }
 }
 
 class ExerciseCatalogItem {
@@ -75,6 +112,26 @@ class MuscleGroupStatus {
   }
 }
 
+class CardioWeek {
+  final double minutes;
+  final int targetMinutes;
+  final String status;
+
+  const CardioWeek({
+    this.minutes = 0.0,
+    this.targetMinutes = 90,
+    this.status = 'low',
+  });
+
+  factory CardioWeek.fromJson(Map<String, dynamic> json) {
+    return CardioWeek(
+      minutes: (json['minutes'] as num?)?.toDouble() ?? 0.0,
+      targetMinutes: (json['target_minutes'] as num?)?.toInt() ?? 90,
+      status: json['status'] as String? ?? 'low',
+    );
+  }
+}
+
 class TrainingAdequacy {
   final String summary;
   final String detail;
@@ -83,6 +140,7 @@ class TrainingAdequacy {
   final double totalSetsToday;
   final List<String> recommendedNext;
   final List<MuscleGroupStatus> muscleGroups;
+  final CardioWeek cardioWeek;
 
   const TrainingAdequacy({
     required this.summary,
@@ -92,11 +150,13 @@ class TrainingAdequacy {
     required this.totalSetsToday,
     required this.recommendedNext,
     required this.muscleGroups,
+    this.cardioWeek = const CardioWeek(),
   });
 
   factory TrainingAdequacy.fromJson(Map<String, dynamic> json) {
     final next = json['recommended_next'];
     final groups = json['muscle_groups'];
+    final cw = json['cardio_week'];
     return TrainingAdequacy(
       summary: json['summary'] as String? ?? '',
       detail: json['detail'] as String? ?? '',
@@ -110,6 +170,9 @@ class TrainingAdequacy {
               .map((e) => MuscleGroupStatus.fromJson(e as Map<String, dynamic>))
               .toList()
           : const [],
+      cardioWeek: cw is Map<String, dynamic>
+          ? CardioWeek.fromJson(cw)
+          : const CardioWeek(),
     );
   }
 }
