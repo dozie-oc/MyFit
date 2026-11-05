@@ -62,8 +62,11 @@ def create_db_and_tables() -> None:
 
         _safe_alter_table_migrations = [
             "ALTER TABLE meal ADD COLUMN meal_type VARCHAR(20) DEFAULT 'snack'",
+            "ALTER TABLE meals ADD COLUMN meal_type VARCHAR(20) DEFAULT 'snack'",
             "ALTER TABLE exercise ADD COLUMN rir INTEGER",
+            "ALTER TABLE exercises ADD COLUMN rir INTEGER",
             "ALTER TABLE exercise ADD COLUMN workout_session_id INTEGER REFERENCES workoutsession(id)",
+            "ALTER TABLE exercises ADD COLUMN workout_session_id INTEGER REFERENCES workout_sessions(id)",
         ]
         for migration in _safe_alter_table_migrations:
             try:

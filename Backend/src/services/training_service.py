@@ -46,7 +46,7 @@ IMPORTANT HEURISTIC NOTES:
   intensity — NOT strength-training set counts.
 """
 
-from datetime import date as Date, timedelta
+from datetime import date as Date, datetime, timedelta, timezone
 from dataclasses import dataclass, field
 
 from sqlmodel import Session, select
@@ -922,79 +922,150 @@ def evaluate_weekly_progress(
 # SESSION GROUPING
 # ──────────────────────────────────────────────────────────────────────
 
+def get_or_create_active_workout_session(
+    session: Session,
+    user_id: int,
+    target_date: Date,
+) -> WorkoutSession:
+    """
+    Return the user's current active WorkoutSession for `target_date`,
+    or create a new active WorkoutSession if none exists (e.g. first
+    exercise of the day, or previous session was completed/abandoned).
+    """
+    active_session: WorkoutSession | None = session.exec(
+        select(WorkoutSession)
+        .where(
+            WorkoutSession.user_id == user_id,
+            WorkoutSession.date == target_date,
+            WorkoutSession.status == "active",
+        )
+        .order_by(WorkoutSession.started_at.desc(), WorkoutSession.id.desc())
+    ).first()
+
+    if active_session is not None:
+        return active_session
+
+    new_session = WorkoutSession(
+        user_id=user_id,
+        date=target_date,
+        started_at=datetime.now(timezone.utc),
+        status="active",
+    )
+    session.add(new_session)
+    session.flush()
+    return new_session
+
+
+def get_session_exercises(
+    session: Session,
+    user_id: int,
+    workout_session_id: int,
+) -> list[Exercise]:
+    """
+    Return strictly the non-deleted exercises belonging to a specific
+    WorkoutSession owned by `user_id`. Never combines exercises from
+    other sessions or unlinked exercises.
+    """
+    ws: WorkoutSession | None = session.exec(
+        select(WorkoutSession).where(
+            WorkoutSession.id == workout_session_id,
+            WorkoutSession.user_id == user_id,
+        )
+    ).first()
+    if ws is None:
+        return []
+
+    return list(
+        session.exec(
+            select(Exercise)
+            .where(
+                Exercise.user_id == user_id,
+                Exercise.workout_session_id == ws.id,
+                Exercise.deleted_at.is_(None),
+            )
+            .order_by(Exercise.id.asc())
+        ).all()
+    )
+
+
 def get_current_session_exercises(
     session: Session,
     user_id: int,
     today: Date,
+    workout_session_id: int | None = None,
 ) -> list[Exercise]:
     """
-    Get exercises for the user's current workout session.
+    Get exercises for the user's current (or specified) workout session.
 
-    Uses WorkoutSession grouping when an active/completed session
-    exists. Falls back to date-based grouping otherwise.
-
-    Abandoned sessions are NOT included — their exercises are excluded
-    from the current session evaluation (though they remain in the DB
-    for history).
+    - When `workout_session_id` is explicitly provided, returns only that
+      session's exercises (or [] if not found / abandoned).
+    - Otherwise, selects the latest "active" session on `today`, or if none
+      is active, the latest "completed" session on `today`. Returns ONLY
+      exercises belonging to that session so separate workouts on the same
+      date are never combined and unlinked exercises do not leak into the
+      session.
+    - When no active or completed WorkoutSession exists on `today`,
+      deliberately falls back to unlinked exercises (`workout_session_id`
+      is None) on `today` to preserve historical/legacy workout records,
+      while excluding exercises linked to abandoned sessions.
     """
-    # Check for an active or completed workout session today
-    active_session: WorkoutSession | None = session.exec(
-        select(WorkoutSession).where(
+    if workout_session_id is not None:
+        target_session: WorkoutSession | None = session.exec(
+            select(WorkoutSession).where(
+                WorkoutSession.id == workout_session_id,
+                WorkoutSession.user_id == user_id,
+            )
+        ).first()
+        if target_session is None or target_session.status == "abandoned":
+            return []
+        return get_session_exercises(session, user_id, target_session.id)
+
+    # 1. Prefer the most recent active workout session on `today`
+    target_session = session.exec(
+        select(WorkoutSession)
+        .where(
             WorkoutSession.user_id == user_id,
             WorkoutSession.date == today,
-            WorkoutSession.status.in_(["active", "completed"]),
+            WorkoutSession.status == "active",
         )
+        .order_by(WorkoutSession.started_at.desc(), WorkoutSession.id.desc())
     ).first()
 
-    if active_session:
-        # Use session-based grouping: only exercises linked to this session
-        exercises = list(session.exec(
-            select(Exercise).where(
-                Exercise.user_id == user_id,
-                Exercise.workout_session_id == active_session.id,
-                Exercise.deleted_at.is_(None),
+    # 2. Otherwise fall back to the most recently completed session on `today`
+    if target_session is None:
+        target_session = session.exec(
+            select(WorkoutSession)
+            .where(
+                WorkoutSession.user_id == user_id,
+                WorkoutSession.date == today,
+                WorkoutSession.status == "completed",
             )
-        ).all())
+            .order_by(
+                WorkoutSession.completed_at.desc(),
+                WorkoutSession.started_at.desc(),
+                WorkoutSession.id.desc(),
+            )
+        ).first()
 
-        # Also include today's exercises with no session ID
-        # (backward compatibility with exercises logged before sessions existed)
-        unlinked = list(session.exec(
-            select(Exercise).where(
+    if target_session is not None:
+        # Return strictly this session's exercises (do not merge other sessions or unlinked records)
+        return get_session_exercises(session, user_id, target_session.id)
+
+    # 3. No active or completed session on `today`:
+    # Deliberately return unlinked exercises (historical records without a session),
+    # which automatically excludes any exercises linked to abandoned sessions.
+    return list(
+        session.exec(
+            select(Exercise)
+            .where(
                 Exercise.user_id == user_id,
                 Exercise.date == today,
                 Exercise.workout_session_id.is_(None),
                 Exercise.deleted_at.is_(None),
             )
-        ).all())
-
-        return exercises + unlinked
-
-    # No explicit session — fall back to date-based grouping,
-    # but exclude exercises linked to abandoned sessions.
-    abandoned_session_ids: list[int] = [
-        ws.id for ws in session.exec(
-            select(WorkoutSession).where(
-                WorkoutSession.user_id == user_id,
-                WorkoutSession.date == today,
-                WorkoutSession.status == "abandoned",
-            )
+            .order_by(Exercise.id.asc())
         ).all()
-    ]
-
-    query = select(Exercise).where(
-        Exercise.user_id == user_id,
-        Exercise.date == today,
-        Exercise.deleted_at.is_(None),
     )
-
-    if abandoned_session_ids:
-        # Exclude exercises from abandoned sessions
-        query = query.where(
-            ~Exercise.workout_session_id.in_(abandoned_session_ids)
-            | Exercise.workout_session_id.is_(None)
-        )
-
-    return list(session.exec(query).all())
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1006,6 +1077,7 @@ def evaluate_training_adequacy(
     user_id: int,
     goal: UserGoal | None,
     today: Date | None = None,
+    workout_session_id: int | None = None,
 ) -> TrainingAdequacy:
     """
     Evaluate the user's training adequacy.
@@ -1023,18 +1095,39 @@ def evaluate_training_adequacy(
     mappings_by_catalog_id = get_muscle_mappings(session)
 
     # Get current session exercises (respects WorkoutSession grouping)
-    today_exercises = get_current_session_exercises(session, user_id, today)
+    today_exercises = get_current_session_exercises(
+        session,
+        user_id,
+        today,
+        workout_session_id=workout_session_id,
+    )
 
-    # Fetch this week's exercises (Monday through today)
+    # Fetch this week's exercises (Monday through today), excluding abandoned sessions
     monday = today - timedelta(days=today.weekday())
-    week_exercises: list[Exercise] = list(session.exec(
-        select(Exercise).where(
-            Exercise.user_id == user_id,
-            Exercise.date >= monday,
-            Exercise.date <= today,
-            Exercise.deleted_at.is_(None),
+    abandoned_week_ids: list[int] = [
+        ws.id
+        for ws in session.exec(
+            select(WorkoutSession).where(
+                WorkoutSession.user_id == user_id,
+                WorkoutSession.date >= monday,
+                WorkoutSession.date <= today,
+                WorkoutSession.status == "abandoned",
+            )
+        ).all()
+        if ws.id is not None
+    ]
+    week_query = select(Exercise).where(
+        Exercise.user_id == user_id,
+        Exercise.date >= monday,
+        Exercise.date <= today,
+        Exercise.deleted_at.is_(None),
+    )
+    if abandoned_week_ids:
+        week_query = week_query.where(
+            ~Exercise.workout_session_id.in_(abandoned_week_ids)
+            | Exercise.workout_session_id.is_(None)
         )
-    ).all())
+    week_exercises: list[Exercise] = list(session.exec(week_query).all())
 
     # Total raw sets today
     total_sets_today = sum(

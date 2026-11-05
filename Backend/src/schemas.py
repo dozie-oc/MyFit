@@ -740,6 +740,8 @@ class ExerciseLogCreate(BaseModel):
         description="Reps In Reserve: 0 = failure, 1 = one rep left, etc.",
     )
 
+    workout_session_id: int | None = None
+
     @field_validator("name")
     @classmethod
     def normalize_name(cls, value: str) -> str:
@@ -760,6 +762,7 @@ class ExerciseLogUpdate(BaseModel):
     distance_km: float | None = Field(default=None, ge=0)
     intensity: str | None = Field(default=None, max_length=20)
     rir: int | None = Field(default=None, ge=0, le=10)
+    workout_session_id: int | None = None
 
     @field_validator("name")
     @classmethod
@@ -782,6 +785,7 @@ class ExerciseOut(BaseModel):
     name: str
     category: str = "other"
     exercise_catalog_id: int | None = None
+    workout_session_id: int | None = None
     sets: int | None = None
     reps: int | None = None
     weight_kg: float | None = None
@@ -791,6 +795,34 @@ class ExerciseOut(BaseModel):
     rir: int | None = None
     calories_burned: float
     is_pr: bool = False
+
+
+class WorkoutSessionCreate(BaseModel):
+    """Input for starting a new workout session."""
+
+    date: Date | None = None
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class WorkoutSessionUpdate(BaseModel):
+    """Input for updating a workout session status or notes."""
+
+    status: Literal["active", "completed", "abandoned"] | None = None
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class WorkoutSessionOut(BaseModel):
+    """Public representation of a workout session."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    date: date
+    started_at: datetime
+    completed_at: datetime | None = None
+    status: str
+    notes: str | None = None
 
 
 class ExerciseHistoryOut(BaseModel):

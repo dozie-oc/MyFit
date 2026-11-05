@@ -403,14 +403,17 @@ def get_recommendation(
     total_cal = sum(m.calories for m in today_meals)
     total_protein = sum(m.protein for m in today_meals)
 
-    # ── Fetch today's exercises ──────────────────────────────────
-    today_exercises: list[Exercise] = session.exec(
-        select(Exercise).where(
-            Exercise.user_id == user.id,
-            Exercise.date == today,
-            Exercise.deleted_at.is_(None),
-        )
-    ).all()
+    # ── Fetch today's current session exercises ─────────────────
+    from src.services.training_service import (
+        evaluate_training_adequacy,
+        get_current_session_exercises,
+    )
+
+    today_exercises: list[Exercise] = get_current_session_exercises(
+        session=session,
+        user_id=user.id,
+        today=today,
+    )
 
     # ── Target calculation ──────────────────────────────────────
     cal_target, protein_target = _calculate_targets(user, goal)
@@ -418,8 +421,6 @@ def get_recommendation(
     protein_remaining = max(0.0, protein_target - total_protein)
 
     # ── Training adequacy evaluation ─────────────────────────────
-    from src.services.training_service import evaluate_training_adequacy
-
     adequacy = evaluate_training_adequacy(
         session=session,
         user_id=user.id,

@@ -441,9 +441,15 @@ class ApiClient {
     notifyDataChanged({DataScope.exercises});
   }
 
-  static Future<List<Exercise>> getExercises([String? date]) async {
+  static Future<List<Exercise>> getExercises([
+    String? date,
+    int? workoutSessionId,
+  ]) async {
     final params = <String, String>{};
     if (date != null) params['exercise_date'] = date;
+    if (workoutSessionId != null) {
+      params['workout_session_id'] = workoutSessionId.toString();
+    }
     final res = await get('/exercises', params);
     return _list(res, Exercise.fromJson);
   }
@@ -615,8 +621,14 @@ class ApiClient {
   // TRAINING ADEQUACY
   // ─────────────────────────────────────────
 
-  static Future<TrainingAdequacy> getTrainingAdequacy() async {
-    final res = await get('/exercises/adequacy');
+  static Future<TrainingAdequacy> getTrainingAdequacy([
+    int? workoutSessionId,
+  ]) async {
+    final params = <String, String>{};
+    if (workoutSessionId != null) {
+      params['workout_session_id'] = workoutSessionId.toString();
+    }
+    final res = await get('/exercises/adequacy', params);
     return TrainingAdequacy.fromJson(res as Map<String, dynamic>);
   }
 }

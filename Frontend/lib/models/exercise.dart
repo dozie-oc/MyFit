@@ -4,6 +4,7 @@ class Exercise {
   final String name;
   final String category;
   final int? exerciseCatalogId;
+  final int? workoutSessionId;
   final int? sets;
   final int? reps;
   final double? weightKg;
@@ -20,6 +21,7 @@ class Exercise {
     required this.name,
     this.category = 'other',
     this.exerciseCatalogId,
+    this.workoutSessionId,
     this.sets,
     this.reps,
     this.weightKg,
@@ -40,6 +42,7 @@ class Exercise {
       name: json['name'] as String? ?? '',
       category: json['category'] as String? ?? 'other',
       exerciseCatalogId: (json['exercise_catalog_id'] as num?)?.toInt(),
+      workoutSessionId: (json['workout_session_id'] as num?)?.toInt(),
       sets: (json['sets'] as num?)?.toInt(),
       reps: (json['reps'] as num?)?.toInt(),
       weightKg: (json['weight_kg'] as num?)?.toDouble(),

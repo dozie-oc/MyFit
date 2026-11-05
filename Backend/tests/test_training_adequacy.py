@@ -616,3 +616,288 @@ def test_14_different_goals_different_evaluation(session, test_user):
     assert beginner_result.strength_sets_done == advanced_result.strength_sets_done
     # But the threshold is different, so advanced is further from adequate
     assert not advanced_result.is_adequate
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 15: New exercises are associated with the intended workout session
+# ──────────────────────────────────────────────────────────────
+
+def test_15_new_exercises_associated_with_workout_session(client, session, test_user, auth_headers):
+    """Logging exercises associates them with the active WorkoutSession,
+    or with an explicitly specified workout_session_id."""
+    ex1 = _log_exercise(client, auth_headers, "Bench Press", sets=3, reps=8).json()
+    ex2 = _log_exercise(client, auth_headers, "Barbell Row", sets=3, reps=8).json()
+
+    assert ex1["workout_session_id"] is not None
+    assert ex2["workout_session_id"] == ex1["workout_session_id"]
+
+    # Complete the first session and log a new exercise -> gets a new session
+    session_1_id = ex1["workout_session_id"]
+    resp = client.patch(
+        f"/exercises/sessions/{session_1_id}",
+        json={"status": "completed"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "completed"
+
+    ex3 = _log_exercise(client, auth_headers, "Overhead Press", sets=3, reps=10).json()
+    assert ex3["workout_session_id"] is not None
+    assert ex3["workout_session_id"] != session_1_id
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 16: Two sessions on the same date remain separate
+# ──────────────────────────────────────────────────────────────
+
+def test_16_two_sessions_on_same_date_remain_separate(client, session, test_user, auth_headers):
+    """Two workout sessions on the same date must not be combined during
+    session retrieval, adequacy evaluation, or recommendation checks."""
+    _set_goal(client, auth_headers, goal_type="build_muscle", experience="intermediate")
+
+    # Morning session: Bench Press + Barbell Row + Overhead Press (completed)
+    m1 = _log_exercise(client, auth_headers, "Bench Press", sets=4, reps=8).json()
+    m2 = _log_exercise(client, auth_headers, "Barbell Row", sets=4, reps=8).json()
+    m3 = _log_exercise(client, auth_headers, "Overhead Press", sets=3, reps=10).json()
+    morning_session_id = m1["workout_session_id"]
+    assert m2["workout_session_id"] == morning_session_id
+    assert m3["workout_session_id"] == morning_session_id
+
+    # Start an afternoon session on the same date (automatically completes morning session)
+    start_resp = client.post("/exercises/sessions", json={}, headers=auth_headers)
+    assert start_resp.status_code == 201
+    afternoon_session_id = start_resp.json()["id"]
+    assert afternoon_session_id != morning_session_id
+
+    # Log 1 exercise in the afternoon session
+    a1 = _log_exercise(client, auth_headers, "Barbell Squat", sets=3, reps=8).json()
+    assert a1["workout_session_id"] == afternoon_session_id
+
+    # Current session adequacy must ONLY reflect the afternoon session (1 exercise, 3 sets)
+    adeq_current = _get_adequacy(client, auth_headers)
+    assert adeq_current["exercises_today"] == 1
+    assert adeq_current["total_sets_today"] == 3
+
+    # Morning session adequacy when queried explicitly reflects ONLY the morning session (3 exercises, 11 sets)
+    adeq_morning_resp = client.get(
+        f"/exercises/adequacy?workout_session_id={morning_session_id}",
+        headers=auth_headers,
+    )
+    assert adeq_morning_resp.status_code == 200
+    adeq_morning = adeq_morning_resp.json()
+    assert adeq_morning["exercises_today"] == 3
+    assert adeq_morning["total_sets_today"] == 11
+
+    # Session retrieval returns ONLY each session's own exercises
+    morning_ex_resp = client.get(
+        f"/exercises?workout_session_id={morning_session_id}",
+        headers=auth_headers,
+    )
+    assert morning_ex_resp.status_code == 200
+    morning_names = [e["name"] for e in morning_ex_resp.json()]
+    assert morning_names == ["Bench Press", "Barbell Row", "Overhead Press"]
+
+    afternoon_ex_resp = client.get(
+        f"/exercises/sessions/{afternoon_session_id}/exercises",
+        headers=auth_headers,
+    )
+    assert afternoon_ex_resp.status_code == 200
+    afternoon_names = [e["name"] for e in afternoon_ex_resp.json()]
+    assert afternoon_names == ["Barbell Squat"]
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 17: Unlinked exercises do not leak into active sessions
+#          while workout history preserves all records
+# ──────────────────────────────────────────────────────────────
+
+def test_17_unlinked_exercises_do_not_leak_into_session_and_history_preserved(
+    client, session, test_user, auth_headers,
+):
+    """Unlinked legacy exercises on the same date must not be combined into
+    a WorkoutSession's exercises, while full workout history (`GET /exercises`
+    and `GET /exercises/last`) preserves both unlinked and session-linked records."""
+    _set_goal(client, auth_headers, goal_type="build_muscle", experience="intermediate")
+
+    catalog_bench = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Bench Press")
+    ).first()
+
+    # Insert an unlinked historical exercise on today
+    unlinked = Exercise(
+        user_id=test_user.id,
+        date=date.today(),
+        name="Bench Press",
+        category="strength",
+        exercise_catalog_id=catalog_bench.id,
+        sets=4,
+        reps=8,
+        weight_kg=80.0,
+        calories_burned=100.0,
+        workout_session_id=None,
+    )
+    session.add(unlinked)
+    session.commit()
+    session.refresh(unlinked)
+
+    # Now log a new exercise in a tracked session on today
+    logged = _log_exercise(
+        client, auth_headers, "Dumbbell Curl", sets=3, reps=12, weight_kg=15.0,
+    ).json()
+    ws_id = logged["workout_session_id"]
+    assert ws_id is not None
+
+    # Session retrieval must return ONLY Dumbbell Curl (not the unlinked Bench Press)
+    sess_ex_resp = client.get(
+        f"/exercises?workout_session_id={ws_id}",
+        headers=auth_headers,
+    )
+    assert sess_ex_resp.status_code == 200
+    sess_ex = sess_ex_resp.json()
+    assert len(sess_ex) == 1
+    assert sess_ex[0]["name"] == "Dumbbell Curl"
+
+    # Current session adequacy must count ONLY the active session (1 exercise, 3 sets)
+    adeq = _get_adequacy(client, auth_headers)
+    assert adeq["exercises_today"] == 1
+    assert adeq["total_sets_today"] == 3
+
+    # Full workout history (`GET /exercises` without workout_session_id) preserves both!
+    all_ex_resp = client.get("/exercises", headers=auth_headers)
+    assert all_ex_resp.status_code == 200
+    all_names = {e["name"] for e in all_ex_resp.json()}
+    assert all_names == {"Bench Press", "Dumbbell Curl"}
+
+    # Personal record / last history (`GET /exercises/last`) still finds the unlinked Bench Press
+    hist_resp = client.get(
+        f"/exercises/last?exercise_catalog_id={catalog_bench.id}",
+        headers=auth_headers,
+    )
+    assert hist_resp.status_code == 200
+    assert hist_resp.json()["times_logged"] == 1
+    assert hist_resp.json()["best_weight_kg"] == 80.0
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 18: Direct service & router verification of session separation
+# ──────────────────────────────────────────────────────────────
+
+def test_18_workout_session_service_and_router_direct(session, test_user):
+    """Direct verification of workout session association, same-day session
+    separation, explicit session retrieval, and unlinked record safety."""
+    from src.routers.exercises import (
+        create_exercise,
+        create_workout_session,
+        get_exercises,
+        get_training_adequacy,
+        get_workout_session_exercises,
+        update_workout_session,
+    )
+    from src.schemas import (
+        ExerciseLogCreate,
+        WorkoutSessionCreate,
+        WorkoutSessionUpdate,
+    )
+    from src.services.training_service import get_current_session_exercises
+
+    today = date.today()
+    goal = UserGoal(
+        user_id=test_user.id,
+        goal_type="build_muscle",
+        training_experience="intermediate",
+    )
+    session.add(goal)
+    session.commit()
+
+    # 1. Unlinked legacy exercise on yesterday and today
+    catalog_bench = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Bench Press")
+    ).first()
+    unlinked_today = Exercise(
+        user_id=test_user.id,
+        date=today,
+        name="Bench Press",
+        category="strength",
+        exercise_catalog_id=catalog_bench.id,
+        sets=4,
+        reps=8,
+        weight_kg=75.0,
+        calories_burned=90.0,
+        workout_session_id=None,
+    )
+    session.add(unlinked_today)
+    session.commit()
+
+    # Before any WorkoutSession exists on today, unlinked exercise is returned safely
+    initial_current = get_current_session_exercises(session, test_user.id, today)
+    assert len(initial_current) == 1
+    assert initial_current[0].name == "Bench Press"
+
+    # 2. Log two exercises in Session 1 -> automatically creates and shares Session 1
+    ex1 = create_exercise(
+        ExerciseLogCreate(date=today, name="Barbell Row", category="strength", sets=4, reps=8),
+        session=session,
+        current_user=test_user,
+    )
+    ex2 = create_exercise(
+        ExerciseLogCreate(date=today, name="Overhead Press", category="strength", sets=3, reps=10),
+        session=session,
+        current_user=test_user,
+    )
+    assert ex1.workout_session_id is not None
+    assert ex2.workout_session_id == ex1.workout_session_id
+    session_1_id = ex1.workout_session_id
+
+    # Session 1 retrieval returns ONLY its 2 exercises (not the unlinked Bench Press)
+    s1_exercises = get_workout_session_exercises(
+        session_id=session_1_id, session=session, current_user=test_user
+    )
+    assert [e.name for e in s1_exercises] == ["Barbell Row", "Overhead Press"]
+
+    # 3. Start Session 2 on the same date -> completes Session 1 and starts Session 2
+    s2 = create_workout_session(
+        session=session,
+        current_user=test_user,
+        session_data=WorkoutSessionCreate(date=today, notes="Evening legs"),
+    )
+    assert s2.id != session_1_id
+    assert s2.status == "active"
+
+    # Log 1 exercise in Session 2
+    ex3 = create_exercise(
+        ExerciseLogCreate(date=today, name="Barbell Squat", category="strength", sets=5, reps=5),
+        session=session,
+        current_user=test_user,
+    )
+    assert ex3.workout_session_id == s2.id
+
+    # Current session exercises must ONLY be Session 2's Barbell Squat
+    current_after_s2 = get_current_session_exercises(session, test_user.id, today)
+    assert [e.name for e in current_after_s2] == ["Barbell Squat"]
+
+    # Adequacy for current session vs explicit Session 1
+    adeq_s2 = get_training_adequacy(session=session, current_user=test_user)
+    assert adeq_s2.exercises_today == 1
+    assert adeq_s2.total_sets_today == 5
+
+    adeq_s1 = get_training_adequacy(
+        session=session, current_user=test_user, workout_session_id=session_1_id
+    )
+    assert adeq_s1.exercises_today == 2
+    assert adeq_s1.total_sets_today == 7
+
+    # Complete Session 2; current session on today should still resolve to latest completed (Session 2)
+    update_workout_session(
+        session_id=s2.id,
+        session_data=WorkoutSessionUpdate(status="completed"),
+        session=session,
+        current_user=test_user,
+    )
+    current_completed = get_current_session_exercises(session, test_user.id, today)
+    assert [e.name for e in current_completed] == ["Barbell Squat"]
+
+    # Full history (`get_exercises` without workout_session_id) preserves all 4 exercises
+    all_history = get_exercises(session=session, current_user=test_user, exercise_date=today)
+    assert len(all_history) == 4
+
+
