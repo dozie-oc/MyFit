@@ -30,11 +30,30 @@ class MyFitApp extends StatelessWidget {
         Widget homeWidget;
         if (!authState.isLoggedIn) {
           homeWidget = LoginScreen(authState: authState);
-        } else if (authState.checkingGoal) {
+        } else if (authState.checkingGoal ||
+            authState.goalStatus == GoalStatus.loading) {
           homeWidget = const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
-        } else if (!authState.hasGoal) {
+        } else if (authState.goalStatus == GoalStatus.error) {
+          homeWidget = Scaffold(
+            appBar: AppBar(
+              title: const Text('MyFit'),
+              actions: [
+                IconButton(
+                  tooltip: 'Log Out',
+                  icon: const Icon(Icons.logout),
+                  onPressed: () => authState.logout(),
+                ),
+              ],
+            ),
+            body: ErrorView(
+              message: authState.goalError ??
+                  'Failed to check fitness goal. Please check your connection and try again.',
+              onRetry: () => authState.checkGoal(),
+            ),
+          );
+        } else if (authState.goalStatus == GoalStatus.noGoal) {
           homeWidget = GoalScreen(
             isOnboarding: true,
             onSaved: () => authState.markGoalCompleted(),
