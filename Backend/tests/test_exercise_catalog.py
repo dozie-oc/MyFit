@@ -722,7 +722,7 @@ def test_q5_recommender_suggested_load(session: Session):
     assert rec0.items[0].weight_kg is None
     assert rec0.items[0].last_performance is None
 
-    # 2. History with reps >= target_reps (8) and rir >= 1 -> suggest weight + 2.5
+    # 2. History with reps >= target_reps (8) and manageable effort_rating (1-4) -> suggest weight + 2.5
     ex1 = Exercise(
         user_id=user.id,
         date=today - timedelta(days=3),
@@ -732,7 +732,7 @@ def test_q5_recommender_suggested_load(session: Session):
         sets=4,
         reps=8,
         weight_kg=60.0,
-        rir=2,
+        effort_rating=4,  # Hard
         calories_burned=80.0,
         calories_burned_per_minute=5.0,
     )
@@ -743,11 +743,12 @@ def test_q5_recommender_suggested_load(session: Session):
     assert rec1.items[0].weight_kg == 62.5
     assert rec1.items[0].last_performance is not None
     assert "60" in rec1.items[0].last_performance
+    assert "Hard" in rec1.items[0].last_performance
     assert "3 days ago" in rec1.items[0].last_performance
     assert "62.5" in rec1.reason
     assert rec1.items[0].last_performance in rec1.reason
 
-    # 3. History with reps < target_reps (or rir == 0) -> suggest same weight
+    # 3. History with reps < target_reps (or effort_rating == 5 Extremely Hard) -> suggest same weight
     ex2 = Exercise(
         user_id=user.id,
         date=today - timedelta(days=1),
@@ -757,7 +758,7 @@ def test_q5_recommender_suggested_load(session: Session):
         sets=4,
         reps=6,
         weight_kg=62.5,
-        rir=0,
+        effort_rating=5,  # Extremely Hard
         calories_burned=80.0,
         calories_burned_per_minute=5.0,
     )

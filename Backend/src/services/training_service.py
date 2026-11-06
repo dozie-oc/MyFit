@@ -38,10 +38,11 @@ IMPORTANT HEURISTIC NOTES:
   exact prescriptions.  Individual variation is enormous.
 - Primary muscles receive full set credit (1.0×).
   Secondary muscles receive partial credit (0.5×).
-- RIR-based effort weighting uses conservative cutoffs.
-  When RIR is unknown (None), the set receives full credit rather
-  than being penalised — we assume the user trained with reasonable
-  effort unless they tell us otherwise.
+- Effort-rating weighting uses a simple 1–5 scale:
+  1 = Very Easy, 2 = Easy, 3 = Moderate, 4 = Hard, 5 = Extremely Hard.
+  Unknown effort (None) is never treated as a known effort rating;
+  unrated sets are counted at face value without assuming a specific
+  perceived effort level.
 - Cardio adequacy is evaluated using duration and intensity — NOT
   strength-training set counts. Distance may be recorded, but it does
   not substitute for duration or fabricate effective minutes.
@@ -77,31 +78,42 @@ ALL_MUSCLE_GROUPS = [
 PRIMARY_MUSCLE_WEIGHT = 1.0
 SECONDARY_MUSCLE_WEIGHT = 0.5
 
-# RIR-based effort multiplier for set effectiveness.
-# Sets very far from failure contribute less volume signal.
-# When RIR is None (unknown), we give full credit.
-RIR_EFFORT_MULTIPLIERS: dict[int | None, float] = {
-    None: 1.0,   # Unknown — assume reasonable effort
-    0: 1.0,      # Failure — full credit
-    1: 1.0,      # Very hard — full credit
-    2: 1.0,      # Hard — full credit
-    3: 0.9,      # Moderate-hard — slightly reduced
-    4: 0.75,     # Moderate — reduced
-    5: 0.6,      # Easy-moderate
-    # 6+ = warm-up territory
+# 1–5 Effort Rating labels and descriptions.
+EFFORT_RATING_LABELS: dict[int, str] = {
+    1: "Very Easy",
+    2: "Easy",
+    3: "Moderate",
+    4: "Hard",
+    5: "Extremely Hard",
 }
 
-# For RIR values not in the lookup, use this floor.
-RIR_EFFORT_FLOOR = 0.4
+EFFORT_RATING_DESCRIPTIONS: dict[int, str] = {
+    1: "Could have done significantly more. Barely challenging.",
+    2: "Comfortable set. Little difficulty completing repetitions.",
+    3: "Noticeably challenging, but still comfortably manageable.",
+    4: "Required considerable effort. Completing more repetitions would be difficult.",
+    5: "Near maximum effort or unable to complete another repetition with good form.",
+}
+
+# Effort-rating multiplier for set effectiveness (only for known 1–5 ratings).
+EFFORT_RATING_MULTIPLIERS: dict[int, float] = {
+    1: 0.50,  # Very Easy — barely challenging (warm-up territory)
+    2: 0.75,  # Easy — comfortable set, reduced stimulus
+    3: 0.90,  # Moderate — noticeably challenging, comfortably manageable
+    4: 1.00,  # Hard — required considerable effort (full credit)
+    5: 1.00,  # Extremely Hard — near maximum effort (full credit)
+}
 
 
-def _rir_effort(rir: int | None) -> float:
-    """Return the effort multiplier for a given RIR value."""
-    if rir is None:
-        return RIR_EFFORT_MULTIPLIERS[None]
-    if rir in RIR_EFFORT_MULTIPLIERS:
-        return RIR_EFFORT_MULTIPLIERS[rir]
-    return RIR_EFFORT_FLOOR
+def _effort_multiplier(effort_rating: int | None) -> float:
+    """
+    Return the set effectiveness multiplier for a known effort rating (1–5).
+    When effort_rating is None (unknown), returns 1.0 (unadjusted set count)
+    without treating unknown effort as a known rating.
+    """
+    if effort_rating is None:
+        return 1.0
+    return EFFORT_RATING_MULTIPLIERS.get(effort_rating, 1.0)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -352,7 +364,7 @@ def calculate_exercise_volume(
     For resistance training:
     - Uses the exercise's sets count
     - Applies primary/secondary weighting
-    - Applies RIR effort multiplier
+    - Applies effort-rating multiplier (when effort_rating is known)
 
     For cardio/flexibility exercises (no muscle mappings or no sets):
     - Returns an empty dict (cardio does not contribute resistance volume)
@@ -369,7 +381,7 @@ def calculate_exercise_volume(
     if not mappings:
         return {}
 
-    effort = _rir_effort(exercise.rir)
+    effort = _effort_multiplier(exercise.effort_rating)
     result: dict[str, float] = {}
 
     for mapping in mappings:
@@ -708,12 +720,12 @@ def _calculate_working_sets(exercises: list[Exercise]) -> float:
     """
     Calculate effort-adjusted working sets across strength exercises.
     Unlike `aggregate_volume` (which sums primary + secondary muscle credits),
-    each logged set counts as 1 working set weighted by RIR effort.
+    each logged set counts as 1 working set weighted by effort rating (when known).
     """
     total = 0.0
     for ex in exercises:
         if ex.sets is not None and ex.sets > 0:
-            total += ex.sets * _rir_effort(ex.rir)
+            total += ex.sets * _effort_multiplier(ex.effort_rating)
     return round(total, 1)
 
 
@@ -1517,6 +1529,8 @@ def evaluate_training_adequacy(
         detected_split=detected_split,
         mappings_by_catalog_id=mappings_by_catalog_id,
         session_action=session_action,
+        user_id=user_id,
+        today=today,
     )
 
     # Generate summary and detail text
@@ -1590,12 +1604,14 @@ def _generate_next_recommendations(
     detected_split: str | None,
     mappings_by_catalog_id: dict[int, list[ExerciseMuscleMapping]],
     session_action: str,
+    user_id: int | None = None,
+    today: Date | None = None,
 ) -> list[str]:
     """
     Generate a list of recommended next exercises or actions.
 
-    Respects the current split context — if the user is doing upper body,
-    don't recommend a bunch of leg exercises mid-session.
+    Respects the current split context, available equipment, and
+    avoids suggesting exercises already completed today across any session.
     """
     if session_action == "rest":
         return ["Today is a good rest day. You've already hit your weekly training target."]
@@ -1617,6 +1633,13 @@ def _generate_next_recommendations(
         return ["You've done enough for today. Great work!"]
 
     # session_action == "continue_workout"
+    # Equipment compatibility check
+    from src.services.recommendation_service import (
+        normalize_equipment_set,
+        is_equipment_compatible,
+    )
+    user_equipment = normalize_equipment_set(goal.available_equipment if goal else None)
+
     # Find muscles that need the most work, respecting split context and major-muscle priority
     target_muscles = _get_relevant_muscles_for_split(detected_split)
 
@@ -1635,26 +1658,50 @@ def _generate_next_recommendations(
         # All relevant muscles for this split are trained
         return ["Your current muscle groups are well-covered. Consider finishing up or adding accessory work."]
 
-    # Look up exercises that hit the most-needed muscles
+    # Look up exercises that hit the most-needed muscles, excluding any exercise done today
     done_catalog_ids = {ex.exercise_catalog_id for ex in today_exercises if ex.exercise_catalog_id}
-    suggestions: list[str] = []
+    done_names = {ex.name.lower().strip() for ex in today_exercises if ex.name}
+    if user_id is not None and today is not None:
+        all_today = session.exec(
+            select(Exercise).where(
+                Exercise.user_id == user_id,
+                Exercise.date == today,
+                Exercise.deleted_at.is_(None),
+            )
+        ).all()
+        for ex in all_today:
+            if ex.exercise_catalog_id:
+                done_catalog_ids.add(ex.exercise_catalog_id)
+            if ex.name:
+                done_names.add(ex.name.lower().strip())
 
+    suggestions: list[str] = []
     needed_muscles = {mv.muscle_group for mv in undertrained_relevant[:3]}
 
-    # Find catalog exercises that target needed muscles
+    # Find catalog exercises that target needed muscles and match equipment and split context
     for catalog_id, mappings in mappings_by_catalog_id.items():
         if catalog_id in done_catalog_ids:
             continue
+        catalog_item = session.get(ExerciseCatalogItem, catalog_id)
+        if not catalog_item or catalog_item.is_custom:
+            continue
+        if catalog_item.name.lower().strip() in done_names:
+            continue
+        if not is_equipment_compatible(catalog_item.equipment, user_equipment):
+            continue
+
         exercise_muscles = {m.muscle_group for m in mappings if m.role == "primary"}
+        if detected_split == "upper" and exercise_muscles and exercise_muscles.issubset(LOWER_MUSCLE_GROUPS):
+            continue
+        elif detected_split == "lower" and exercise_muscles and exercise_muscles.issubset(UPPER_MUSCLE_GROUPS):
+            continue
+
         overlap = exercise_muscles & needed_muscles
         if overlap:
-            # Get the exercise name
-            catalog_item = session.get(ExerciseCatalogItem, catalog_id)
-            if catalog_item and not catalog_item.is_custom:
-                muscles_str = ", ".join(sorted(overlap)).replace("_", "/")
-                suggestions.append(f"{catalog_item.name} (targets: {muscles_str})")
-                if len(suggestions) >= 3:
-                    break
+            muscles_str = ", ".join(sorted(overlap)).replace("_", "/")
+            suggestions.append(f"{catalog_item.name} (targets: {muscles_str})")
+            if len(suggestions) >= 3:
+                break
 
     if not suggestions:
         muscle_names = [mv.muscle_group.replace("_", "/") for mv in undertrained_relevant[:3]]

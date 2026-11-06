@@ -733,11 +733,15 @@ class ExerciseLogCreate(BaseModel):
         max_length=20,
     )
 
-    rir: int | None = Field(
+    effort_rating: int | None = Field(
         default=None,
-        ge=0,
-        le=10,
-        description="Reps In Reserve: 0 = failure, 1 = one rep left, etc.",
+        ge=1,
+        le=5,
+        description=(
+            "Perceived effort rating (1-5): "
+            "1=Very Easy, 2=Easy, 3=Moderate, 4=Hard, 5=Extremely Hard. "
+            "None means unknown."
+        ),
     )
 
     workout_session_id: int | None = None
@@ -761,7 +765,7 @@ class ExerciseLogUpdate(BaseModel):
     duration_minutes: int | None = Field(default=None, gt=0)
     distance_km: float | None = Field(default=None, ge=0)
     intensity: str | None = Field(default=None, max_length=20)
-    rir: int | None = Field(default=None, ge=0, le=10)
+    effort_rating: int | None = Field(default=None, ge=1, le=5)
     workout_session_id: int | None = None
 
     @field_validator("name")
@@ -792,7 +796,7 @@ class ExerciseOut(BaseModel):
     duration_minutes: int | None = None
     distance_km: float | None = None
     intensity: str | None = None
-    rir: int | None = None
+    effort_rating: int | None = None
     calories_burned: float
     is_pr: bool = False
 
@@ -980,6 +984,7 @@ class RecommendationItem(BaseModel):
     sets: int | None = None
     reps: int | None = None
     weight_kg: float | None = None
+    rest_seconds: int | None = None
     last_performance: str | None = None
     duration_minutes: int | None = None
     description: str | None = None

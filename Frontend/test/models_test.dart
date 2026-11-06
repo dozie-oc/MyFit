@@ -295,10 +295,12 @@ void main() {
         'sets': 4,
         'reps': 8,
         'weight_kg': 62.5,
+        'rest_seconds': 120,
         'last_performance': 'Last time: 60 kg x 8, 3 days ago',
       });
       expect(recItem.exerciseCatalogId, 9);
       expect(recItem.weightKg, 62.5);
+      expect(recItem.restSeconds, 120);
       expect(recItem.lastPerformance, 'Last time: 60 kg x 8, 3 days ago');
 
       final catItem = ExerciseCatalogItem.fromJson({
@@ -436,6 +438,43 @@ void main() {
       expect(hasCookingFat(['Boiled potato']), isFalse);
       expect(hasCookingFat(['Palm Oil', 'Rice']), isTrue);
       expect(hasCookingFat(['Unsalted butter']), isTrue);
+    });
+  });
+
+  group('Exercise Effort Rating Model', () {
+    test('parses known and unknown effort_rating and resolves labels', () {
+      final exKnown = Exercise.fromJson({
+        'id': 1,
+        'date': '2026-11-06',
+        'name': 'Bench Press',
+        'category': 'strength',
+        'sets': 4,
+        'reps': 8,
+        'weight_kg': 75.0,
+        'effort_rating': 4,
+        'calories_burned': 80.0,
+      });
+      expect(exKnown.effortRating, 4);
+      expect(exKnown.effortLabel, 'Hard');
+      expect(
+        Exercise.effortDescriptions[4],
+        'Required considerable effort. Completing more repetitions would be difficult.',
+      );
+
+      final exUnknown = Exercise.fromJson({
+        'id': 2,
+        'date': '2026-11-06',
+        'name': 'Bench Press',
+        'category': 'strength',
+        'sets': 4,
+        'reps': 8,
+        'weight_kg': 75.0,
+        'effort_rating': null,
+        'calories_burned': 80.0,
+      });
+      expect(exUnknown.effortRating, isNull);
+      expect(exUnknown.effortLabel, isNull);
+      expect(Exercise.effortLabels.keys.toList(), [1, 2, 3, 4, 5]);
     });
   });
 }

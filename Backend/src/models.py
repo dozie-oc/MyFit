@@ -656,13 +656,13 @@ class Exercise(SQLModel, table=True):
         max_length=20,
     )
 
-    # Reps In Reserve — optional effort indicator for resistance training.
-    # 0 = approximately failure, 1 = one rep left, 2 = two reps left, etc.
-    # None means unknown (not failure, not easy — just unspecified).
-    rir: int | None = Field(
+    # Perceived effort rating (1-5 scale) for resistance training:
+    # 1 = Very Easy, 2 = Easy, 3 = Moderate, 4 = Hard, 5 = Extremely Hard.
+    # None means unknown (unspecified, or historical record prior to effort_rating).
+    effort_rating: int | None = Field(
         default=None,
-        ge=0,
-        le=10,
+        ge=1,
+        le=5,
     )
 
     # Optional link to a WorkoutSession for explicit grouping.

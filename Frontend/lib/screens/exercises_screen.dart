@@ -220,7 +220,7 @@ class _ExerciseCard extends StatelessWidget {
     final weight = exercise.weightKg;
     final dist = exercise.distanceKm;
     final intensity = exercise.intensity;
-    final rir = exercise.rir;
+    final effortLabel = exercise.effortLabel;
 
     IconData iconData = Icons.fitness_center;
     Color iconColor = const Color(0xFFEF4444);
@@ -241,7 +241,7 @@ class _ExerciseCard extends StatelessWidget {
     }
     if (mins != null) details.add('$mins min');
     if (dist != null && dist > 0) details.add('${dist}km');
-    if (rir != null) details.add('RIR $rir');
+    if (effortLabel != null) details.add('Effort: $effortLabel');
     if (intensity != null && intensity.isNotEmpty && intensity != 'moderate') {
       details.add(intensity);
     }
@@ -374,8 +374,8 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
   final _weightCtrl = TextEditingController();
   // Cardio-only field
   final _distCtrl = TextEditingController();
-  // RIR (Reps In Reserve) — optional effort indicator
-  final _rirCtrl = TextEditingController();
+  // Effort rating (1-5) — optional perceived effort indicator for strength
+  int? _effortRating;
 
   String _category = 'strength'; // 'strength', 'cardio', 'flexibility', 'other'
   String _intensity = 'moderate'; // 'low', 'moderate', 'high'
@@ -405,7 +405,7 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
       if (ex.intensity != null && ex.intensity!.isNotEmpty) {
         _intensity = ex.intensity!;
       }
-      if (ex.rir != null) _rirCtrl.text = ex.rir.toString();
+      _effortRating = ex.effortRating;
       final parsedDate = DateTime.tryParse(ex.date);
       if (parsedDate != null) _date = parsedDate;
     } else {
@@ -517,7 +517,6 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
     _repsCtrl.dispose();
     _weightCtrl.dispose();
     _distCtrl.dispose();
-    _rirCtrl.dispose();
     super.dispose();
   }
 
@@ -545,10 +544,11 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
         _minsCtrl.clear();
         _distCtrl.clear();
       } else {
-        // Non-strength: clear sets/reps/weight
+        // Non-strength: clear sets/reps/weight/effortRating
         _setsCtrl.clear();
         _repsCtrl.clear();
         _weightCtrl.clear();
+        _effortRating = null;
         if (newCat == 'flexibility') {
           // Flexibility: also clear distance (not applicable)
           _distCtrl.clear();
@@ -660,7 +660,7 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
 
     setState(() => _saving = true);
     try {
-      final rirVal = isStrength ? int.tryParse(_rirCtrl.text.trim()) : null;
+      final effortVal = isStrength ? _effortRating : null;
       final body = <String, dynamic>{
         'date': _dateStr,
         'name': name,
@@ -672,7 +672,8 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
         if (mins != null) 'duration_minutes': mins,
         if (dist != null) 'distance_km': dist,
         'intensity': _intensity,
-        if (rirVal != null) 'rir': rirVal,
+        if (effortVal != null || widget.existing != null)
+          'effort_rating': effortVal,
       };
       final Exercise saved;
       if (widget.existing != null) {
@@ -912,33 +913,60 @@ class _LogExerciseSheetState extends State<_LogExerciseSheet> {
                 ],
               ),
               const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _minsCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Duration (min)',
-                        hintText: 'Estimated from sets if omitted',
-                      ),
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _rirCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'RIR (optional)',
-                        hintText: '0=failure, 2=2 left',
-                      ),
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    ),
-                  ),
-                ],
+              TextField(
+                controller: _minsCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Duration (min)',
+                  hintText: 'Estimated from sets if omitted',
+                ),
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               ),
+              const SizedBox(height: 12),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Effort Rating (optional)',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF374151),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: Exercise.effortLabels.entries.map((entry) {
+                  final rating = entry.key;
+                  final label = entry.value;
+                  final selected = _effortRating == rating;
+                  return ChoiceChip(
+                    label: Text('$rating · $label'),
+                    selected: selected,
+                    onSelected: (v) {
+                      setState(() {
+                        _effortRating = v ? rating : null;
+                      });
+                    },
+                  );
+                }).toList(),
+              ),
+              if (_effortRating != null &&
+                  Exercise.effortDescriptions[_effortRating] != null) ...[
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    Exercise.effortDescriptions[_effortRating]!,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF6B7280),
+                    ),
+                  ),
+                ),
+              ],
             ],
 
             // ── CARDIO fields ─────────────────────

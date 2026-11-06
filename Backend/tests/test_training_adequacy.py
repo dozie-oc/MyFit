@@ -8,7 +8,7 @@ Covers ALL 14 required scenarios:
  4. A suitable cardio session can be evaluated without strength-set data.
  5. Weekly progress does NOT automatically mark today's session adequate.
  6. A session can be adequate even when weekly targets haven't been reached.
- 7. Missing RIR, load, or other optional fields are handled safely.
+ 7. Missing effort_rating, load, or other optional fields are handled safely.
  8. Multiple exercises targeting the same muscle group update volume correctly.
  9. Recommendations adapt after exercises are logged and avoid duplication.
 10. Equipment restrictions and missing muscle mappings are handled safely.
@@ -174,7 +174,7 @@ def _log_exercise(client, auth_headers, name, **kwargs):
         "category": kwargs.get("category", "strength"),
     }
     for k in ("sets", "reps", "weight_kg", "duration_minutes",
-              "distance_km", "intensity", "rir"):
+              "distance_km", "intensity", "effort_rating"):
         if k in kwargs:
             payload[k] = kwargs[k]
     return client.post("/exercises", json=payload, headers=auth_headers)
@@ -324,15 +324,15 @@ def test_06_session_adequate_despite_weekly_gap(client, session, test_user, auth
 
 
 # ──────────────────────────────────────────────────────────────
-# TEST 7: Missing RIR, load, and optional fields handled safely
+# TEST 7: Missing effort_rating, load, and optional fields handled safely
 # ──────────────────────────────────────────────────────────────
 
 def test_07_missing_optional_fields_safe(client, session, test_user, auth_headers):
-    """Exercises with no RIR, no weight_kg, and no duration should
+    """Exercises with no effort_rating, no weight_kg, and no duration should
     still be processed without errors."""
     _set_goal(client, auth_headers, goal_type="build_muscle", experience="beginner")
 
-    # Log exercises with only required fields (sets/reps, no rir, no weight)
+    # Log exercises with only required fields (sets/reps, no effort_rating, no weight)
     _log_exercise(client, auth_headers, "Push-ups", sets=3, reps=15)
     _log_exercise(client, auth_headers, "Barbell Squat", sets=3, reps=10)
     _log_exercise(client, auth_headers, "Pull-ups", sets=3, reps=8)
@@ -1508,6 +1508,879 @@ def test_28_different_frequencies_and_split_routines_weekly_evaluation(
     assert adeq_upper_lower.weekly_progress.detected_routine == "upper_lower"
     assert adeq_upper_lower.weekly_progress.core_regions_covered == 3
     assert adeq_upper_lower.weekly_progress.overall_status == "adequate"
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 29: Recommendations match user available equipment and session context
+# ──────────────────────────────────────────────────────────────
+
+def test_29_recommendations_match_equipment_and_session_context(
+    session, test_user,
+):
+    """Recommendations strictly match the user's available equipment and
+    maintain session split context (e.g. upper vs lower body)."""
+    from src.services.recommendation_service import get_recommendation
+    from src.services.training_service import evaluate_training_adequacy
+
+    today = date(2026, 11, 6)
+
+    # 1. Equipment restriction: Dumbbell user only receives dumbbell or bodyweight exercises
+    goal_db = UserGoal(
+        user_id=test_user.id,
+        goal_type="build_muscle",
+        training_experience="intermediate",
+        available_equipment="dumbbell",
+    )
+    session.add(goal_db)
+    session.commit()
+
+    rec_db = get_recommendation(session=session, user=test_user, rec_type="exercise", today=today)
+    assert rec_db.has_recommendation is True
+    assert rec_db.items[0].name in ("Dumbbell Curl", "Push-ups", "Plank", "Pull-ups", "Running")
+    assert rec_db.items[0].name not in ("Bench Press", "Barbell Squat", "Deadlift", "Barbell Row", "Leg Press")
+
+    # 2. Equipment restriction: "none" user only receives bodyweight exercises
+    goal_db.available_equipment = "none"
+    session.add(goal_db)
+    session.commit()
+
+    rec_none = get_recommendation(session=session, user=test_user, rec_type="exercise", today=today)
+    assert rec_none.has_recommendation is True
+    assert rec_none.items[0].name in ("Push-ups", "Plank", "Pull-ups", "Running")
+    assert rec_none.items[0].name not in ("Bench Press", "Barbell Squat", "Dumbbell Curl", "Leg Press")
+
+    # 3. Session Context: User with full gym equipment starts an UPPER body workout with Bench Press
+    goal_db.available_equipment = "barbell,dumbbell,machines"
+    session.add(goal_db)
+    session.commit()
+
+    bench = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Bench Press")
+    ).first()
+    session.add(
+        Exercise(
+            user_id=test_user.id,
+            date=today,
+            name="Bench Press",
+            category="strength",
+            exercise_catalog_id=bench.id,
+            sets=3,
+            reps=8,
+            calories_burned=60.0,
+        )
+    )
+    session.commit()
+
+    # Mid-session recommendation must recommend an upper-body exercise (e.g. Barbell Row or Overhead Press),
+    # NEVER a lower body exercise like Barbell Squat or Leg Press
+    rec_upper = get_recommendation(session=session, user=test_user, rec_type="exercise", today=today)
+    assert rec_upper.has_recommendation is True
+    upper_pick = rec_upper.items[0].name
+    assert upper_pick in ("Barbell Row", "Overhead Press", "Pull-ups", "Dumbbell Curl", "Push-ups")
+    assert upper_pick not in ("Barbell Squat", "Leg Press", "Deadlift")
+
+    # Training adequacy recommended_next also respects the upper body split context
+    adeq = evaluate_training_adequacy(session=session, user_id=test_user.id, goal=goal_db, today=today)
+    for next_sugg in adeq.recommended_next:
+        assert "Squat" not in next_sugg
+        assert "Leg Press" not in next_sugg
+
+    # 4. Session Context: User starts a LOWER body workout with Barbell Squat
+    for ex in session.exec(select(Exercise).where(Exercise.user_id == test_user.id)).all():
+        session.delete(ex)
+    squat = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Barbell Squat")
+    ).first()
+    session.add(
+        Exercise(
+            user_id=test_user.id,
+            date=today,
+            name="Barbell Squat",
+            category="strength",
+            exercise_catalog_id=squat.id,
+            sets=3,
+            reps=8,
+            calories_burned=75.0,
+        )
+    )
+    session.commit()
+
+    rec_lower = get_recommendation(session=session, user=test_user, rec_type="exercise", today=today)
+    assert rec_lower.has_recommendation is True
+    lower_pick = rec_lower.items[0].name
+    assert lower_pick in ("Deadlift", "Leg Press")
+    assert lower_pick not in ("Bench Press", "Overhead Press", "Barbell Row")
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 30: Avoid recommending exercises already completed that day
+# ──────────────────────────────────────────────────────────────
+
+def test_30_avoid_recommending_exercises_already_completed_that_day(
+    session, test_user,
+):
+    """The engine avoids recommending exercises already completed earlier that day
+    across any workout session when suitable alternatives exist in the catalog."""
+    from src.services.recommendation_service import get_recommendation
+
+    today = date(2026, 11, 6)
+    goal = UserGoal(
+        user_id=test_user.id,
+        goal_type="build_muscle",
+        training_experience="intermediate",
+        available_equipment="barbell,dumbbell,bodyweight",
+    )
+    session.add(goal)
+    session.commit()
+
+    bench = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Bench Press")
+    ).first()
+
+    # User completed Bench Press earlier today in Session 1
+    session_1 = WorkoutSession(
+        user_id=test_user.id,
+        date=today,
+        status="completed",
+        notes="Morning chest",
+    )
+    session.add(session_1)
+    session.flush()
+
+    session.add(
+        Exercise(
+            user_id=test_user.id,
+            date=today,
+            name="Bench Press",
+            category="strength",
+            exercise_catalog_id=bench.id,
+            workout_session_id=session_1.id,
+            sets=4,
+            reps=8,
+            calories_burned=80.0,
+        )
+    )
+    session.commit()
+
+    # Later today, user starts Session 2 and asks for a recommendation
+    session_2 = WorkoutSession(
+        user_id=test_user.id,
+        date=today,
+        status="active",
+        notes="Evening workout",
+    )
+    session.add(session_2)
+    session.commit()
+
+    rec = get_recommendation(session=session, user=test_user, rec_type="exercise", today=today)
+    assert rec.has_recommendation is True
+    # Bench Press must NOT be recommended because it was already completed earlier today
+    assert rec.items[0].name != "Bench Press"
+    assert rec.items[0].name in ("Barbell Row", "Overhead Press", "Pull-ups", "Barbell Squat", "Deadlift", "Dumbbell Curl")
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 31: Completion state does not suppress prematurely and recent activity influences selection
+# ──────────────────────────────────────────────────────────────
+
+def test_31_completion_state_does_not_suppress_prematurely_and_recency_influences_selection(
+    session, test_user,
+):
+    """Incomplete workouts are not suppressed prematurely, active workouts take
+    precedence in general recommendations, and recent training history (yesterday)
+    influences exercise selection appropriately."""
+    from src.services.recommendation_service import get_recommendation
+
+    today = date(2026, 11, 6)
+    yesterday = today - timedelta(days=1)
+
+    goal = UserGoal(
+        user_id=test_user.id,
+        goal_type="build_muscle",
+        training_experience="intermediate",
+        available_equipment="barbell,dumbbell,bodyweight",
+    )
+    session.add(goal)
+
+    # 1. User worked back heavily yesterday with Barbell Row
+    row = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Barbell Row")
+    ).first()
+    session.add(
+        Exercise(
+            user_id=test_user.id,
+            date=yesterday,
+            name="Barbell Row",
+            category="strength",
+            exercise_catalog_id=row.id,
+            sets=5,
+            reps=8,
+            calories_burned=100.0,
+        )
+    )
+
+    # 2. Today, user has logged 1 small exercise (Dumbbell Curl, 2 sets) — incomplete workout
+    curl = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Dumbbell Curl")
+    ).first()
+    session.add(
+        Exercise(
+            user_id=test_user.id,
+            date=today,
+            name="Dumbbell Curl",
+            category="strength",
+            exercise_catalog_id=curl.id,
+            sets=2,
+            reps=10,
+            calories_burned=30.0,
+        )
+    )
+    session.commit()
+
+    # Exercise recommendation must NOT be suppressed (workout is incomplete)
+    rec_ex = get_recommendation(session=session, user=test_user, rec_type="exercise", today=today)
+    assert rec_ex.has_recommendation is True
+    # Because Barbell Row was performed heavily yesterday, the engine should avoid Barbell Row today
+    assert rec_ex.items[0].name != "Barbell Row"
+    # Should pick another major compound group that was not worked yesterday (e.g. Bench Press or Barbell Squat)
+    assert rec_ex.items[0].name in ("Bench Press", "Barbell Squat", "Overhead Press")
+
+    # In general recommendations (rec_type=None), an active incomplete workout must NOT be
+    # prematurely suppressed by meal recommendations (e.g. dinner)
+    rec_gen = get_recommendation(session=session, user=test_user, rec_type=None, today=today)
+    assert rec_gen.has_recommendation is True
+    assert rec_gen.type == "exercise"
+    assert rec_gen.items[0].name != "Barbell Row"
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 32: Effort rating (1-5) known vs unknown in adequacy and progression
+# ──────────────────────────────────────────────────────────────
+
+def test_32_effort_rating_known_and_unknown_adequacy_and_progression(
+    session, test_user,
+):
+    """Verify the 1-5 effort rating system across adequacy and progression:
+    - Known low effort (1 = Very Easy) discounts working sets so a warm-up-only
+      session is not prematurely marked adequate.
+    - Known hard effort (4 = Hard, 5 = Extremely Hard) receives full credit.
+    - Progression increases weight (+2.5kg) only when effort is known to be
+      manageable (1-4) and target reps are met; unknown effort (None) or
+      Extremely Hard (5) keeps the same weight without treating unknown effort
+      as a known rating."""
+    from src.services.recommendation_service import get_recommendation
+    from src.services.training_service import (
+        EFFORT_RATING_DESCRIPTIONS,
+        EFFORT_RATING_LABELS,
+        evaluate_training_adequacy,
+    )
+
+    assert EFFORT_RATING_LABELS == {
+        1: "Very Easy",
+        2: "Easy",
+        3: "Moderate",
+        4: "Hard",
+        5: "Extremely Hard",
+    }
+    assert len(EFFORT_RATING_DESCRIPTIONS) == 5
+
+    today = date(2026, 11, 6)
+    three_days_ago = today - timedelta(days=3)
+
+    goal = UserGoal(
+        user_id=test_user.id,
+        goal_type="build_muscle",
+        training_experience="intermediate",
+        available_equipment="barbell",
+    )
+    session.add(goal)
+    session.commit()
+
+    def _cat(name: str) -> ExerciseCatalogItem:
+        return session.exec(
+            select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == name)
+        ).first()
+
+    bench = _cat("Bench Press")
+    row = _cat("Barbell Row")
+    ohp = _cat("Overhead Press")
+
+    # 1. Session with 3 exercises (3 sets each = 9 raw sets), all rated 1 (Very Easy -> 0.5x multiplier = 4.5 working sets)
+    # Must NOT be marked adequate for intermediate (requires >= 8.0 working sets)
+    for item in (bench, row, ohp):
+        session.add(
+            Exercise(
+                user_id=test_user.id,
+                date=today,
+                name=item.name,
+                category="strength",
+                exercise_catalog_id=item.id,
+                sets=3,
+                reps=8,
+                weight_kg=50.0,
+                effort_rating=1,  # Very Easy
+                calories_burned=50.0,
+            )
+        )
+    session.commit()
+
+    adeq_very_easy = evaluate_training_adequacy(
+        session=session, user_id=test_user.id, goal=goal, today=today,
+    )
+    assert adeq_very_easy.session_adequacy.is_adequate is False
+    assert adeq_very_easy.session_action == "continue_workout"
+
+    # 2. Update effort_rating to 4 (Hard -> 1.0x multiplier = 9.0 working sets) -> now adequate!
+    for ex in session.exec(select(Exercise).where(Exercise.user_id == test_user.id)).all():
+        ex.effort_rating = 4
+        session.add(ex)
+    session.commit()
+
+    adeq_hard = evaluate_training_adequacy(
+        session=session, user_id=test_user.id, goal=goal, today=today,
+    )
+    assert adeq_hard.session_adequacy.is_adequate is True
+    assert adeq_hard.session_action == "workout_adequate"
+
+    # 3. Progression check with unknown effort (None) vs known effort (3 Moderate vs 5 Extremely Hard)
+    for ex in session.exec(select(Exercise).where(Exercise.user_id == test_user.id)).all():
+        session.delete(ex)
+    session.commit()
+
+    # Log Bench Press 3 days ago with unknown effort (effort_rating=None), weight=70kg, reps=8
+    hist_ex = Exercise(
+        user_id=test_user.id,
+        date=three_days_ago,
+        name="Bench Press",
+        category="strength",
+        exercise_catalog_id=bench.id,
+        sets=4,
+        reps=8,
+        weight_kg=70.0,
+        effort_rating=None,  # Unknown effort
+        calories_burned=80.0,
+    )
+    session.add(hist_ex)
+    # Log Squat and Row 3 days ago so Bench Press (chest) is the top recommendation today
+    for other_name in ("Barbell Squat", "Barbell Row", "Deadlift", "Overhead Press"):
+        c_item = _cat(other_name)
+        session.add(
+            Exercise(
+                user_id=test_user.id,
+                date=three_days_ago,
+                name=c_item.name,
+                category="strength",
+                exercise_catalog_id=c_item.id,
+                sets=6,
+                reps=8,
+                weight_kg=80.0,
+                effort_rating=4,
+                calories_burned=90.0,
+            )
+        )
+    session.commit()
+
+    # Unknown effort (None): must NOT treat unknown effort as a known manageable value -> keeps 70.0 kg
+    rec_unknown = get_recommendation(session=session, user=test_user, rec_type="exercise", today=today)
+    assert rec_unknown.items[0].name == "Bench Press"
+    assert rec_unknown.items[0].weight_kg == 70.0
+    assert "(" not in (rec_unknown.items[0].last_performance or "")
+
+    # Known effort = 3 (Moderate): manageable effort + met target reps -> progresses to 72.5 kg
+    hist_ex.effort_rating = 3
+    session.add(hist_ex)
+    session.commit()
+
+    rec_moderate = get_recommendation(session=session, user=test_user, rec_type="exercise", today=today)
+    assert rec_moderate.items[0].name == "Bench Press"
+    assert rec_moderate.items[0].weight_kg == 72.5
+    assert "(Moderate)" in (rec_moderate.items[0].last_performance or "")
+
+    # Known effort = 5 (Extremely Hard): near max effort -> keeps 70.0 kg
+    hist_ex.effort_rating = 5
+    session.add(hist_ex)
+    session.commit()
+
+    rec_max = get_recommendation(session=session, user=test_user, rec_type="exercise", today=today)
+    assert rec_max.items[0].name == "Bench Press"
+    assert rec_max.items[0].weight_kg == 70.0
+    assert "(Extremely Hard)" in (rec_max.items[0].last_performance or "")
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 33: Historical records without effort_rating remain valid
+# ──────────────────────────────────────────────────────────────
+
+def test_33_historical_records_without_effort_rating_remain_valid(
+    session, test_user,
+):
+    """Historical exercise records with effort_rating=None remain valid across
+    router serialization, history lookups, and adequacy evaluation without
+    inventing synthetic effort ratings."""
+    from src.routers.exercises import create_exercise, get_exercise_history, get_exercises, update_exercise
+    from src.schemas import ExerciseLogCreate, ExerciseLogUpdate
+
+    today = date(2026, 11, 6)
+    legacy = Exercise(
+        user_id=test_user.id,
+        date=today - timedelta(days=5),
+        name="Bench Press",
+        category="strength",
+        sets=4,
+        reps=8,
+        weight_kg=65.0,
+        effort_rating=None,
+        calories_burned=75.0,
+    )
+    session.add(legacy)
+    session.commit()
+
+    all_logs = get_exercises(session=session, current_user=test_user)
+    assert len(all_logs) == 1
+    assert all_logs[0].effort_rating is None
+
+    hist = get_exercise_history(session=session, current_user=test_user, name="Bench Press")
+    assert hist.last is not None
+    assert hist.last.effort_rating is None
+
+    # Creating and updating an exercise with effort_rating (1-5) works end-to-end
+    created = create_exercise(
+        ExerciseLogCreate(
+            date=today,
+            name="Bench Press",
+            category="strength",
+            sets=4,
+            reps=8,
+            weight_kg=67.5,
+            effort_rating=4,
+        ),
+        session=session,
+        current_user=test_user,
+    )
+    assert created.effort_rating == 4
+
+    updated = update_exercise(
+        exercise_id=created.id,
+        exercise_data=ExerciseLogUpdate(effort_rating=5),
+        session=session,
+        current_user=test_user,
+    )
+    assert updated.effort_rating == 5
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 34: Strength progression based on comparable history and trends
+# ──────────────────────────────────────────────────────────────
+
+def test_34_strength_progression_comparable_history_and_trends(
+    session, test_user,
+):
+    """Verify conservative, explainable strength progression:
+    - Non-comparable logs (e.g. 1RM singles or 25-rep warmups) do not produce
+      unjustified progression.
+    - When a comparable log exists alongside a newer non-comparable outlier,
+      progression uses the comparable working log.
+    - Incomplete set counts or stale history (>21 days) hold weight.
+    - Recent Hard (4) load jumps consolidate before progressing again.
+    - Consecutive missed targets trigger a conservative deload (-2.5 kg).
+    - Light / isolation lifts use a smaller conservative increment (+1.0 kg)."""
+    from src.services.recommendation_service import (
+        _get_valid_exercise_history,
+        _prescribe_weighted_strength,
+    )
+    from src.services.training_service import get_muscle_mappings
+
+    today = date(2026, 11, 6)
+    mappings = get_muscle_mappings(session)
+
+    bench = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Bench Press")
+    ).first()
+    curl = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Dumbbell Curl")
+    ).first()
+    bench_mappings = mappings.get(bench.id, [])
+    curl_mappings = mappings.get(curl.id, [])
+
+    # 1. Only non-comparable 1RM test (100 kg x 1) -> no load prescribed, clear explanation
+    one_rm = Exercise(
+        user_id=test_user.id,
+        date=today - timedelta(days=2),
+        name="Bench Press",
+        category="strength",
+        exercise_catalog_id=bench.id,
+        sets=1,
+        reps=1,
+        weight_kg=100.0,
+        effort_rating=5,
+        calories_burned=20.0,
+    )
+    session.add(one_rm)
+    session.commit()
+
+    logs = _get_valid_exercise_history(session, test_user.id, bench, today)
+    sets, reps, rest_s, w_kg, last_perf, note = _prescribe_weighted_strength(
+        bench, bench_mappings, "build_muscle", "intermediate", logs, today,
+    )
+    assert (sets, reps, rest_s) == (4, 8, 120)
+    assert w_kg is None
+    assert "non-comparable" in (note or "").lower()
+
+    # 2. Comparable working log (70 kg x 8, effort 3) 4 days ago + 1RM test 2 days ago
+    # -> skips the 1RM outlier and progresses from comparable 70 kg -> 72.5 kg
+    comp_log = Exercise(
+        user_id=test_user.id,
+        date=today - timedelta(days=4),
+        name="Bench Press",
+        category="strength",
+        exercise_catalog_id=bench.id,
+        sets=4,
+        reps=8,
+        weight_kg=70.0,
+        effort_rating=3,
+        calories_burned=80.0,
+    )
+    session.add(comp_log)
+    session.commit()
+
+    logs = _get_valid_exercise_history(session, test_user.id, bench, today)
+    _, _, _, w_kg, last_perf, note = _prescribe_weighted_strength(
+        bench, bench_mappings, "build_muscle", "intermediate", logs, today,
+    )
+    assert w_kg == 72.5
+    assert "70 kg x 8" in (last_perf or "")
+    assert "+2.5 kg" in (note or "")
+
+    # 3. Incomplete working sets (1 set x 8 reps @ 70 kg) -> holds 70.0 kg
+    comp_log.sets = 1
+    session.add(comp_log)
+    session.commit()
+
+    logs = _get_valid_exercise_history(session, test_user.id, bench, today)
+    _, _, _, w_kg, _, note = _prescribe_weighted_strength(
+        bench, bench_mappings, "build_muscle", "intermediate", logs, today,
+    )
+    assert w_kg == 70.0
+    assert "working sets" in (note or "").lower()
+
+    # 4. Stale comparable history (30 days ago) -> holds 70.0 kg conservatively
+    comp_log.sets = 4
+    comp_log.date = today - timedelta(days=30)
+    session.add(comp_log)
+    session.commit()
+
+    logs = _get_valid_exercise_history(session, test_user.id, bench, today)
+    _, _, _, w_kg, _, note = _prescribe_weighted_strength(
+        bench, bench_mappings, "build_muscle", "intermediate", logs, today,
+    )
+    assert w_kg == 70.0
+    assert "30 days ago" in (note or "")
+
+    # 5. Trend consolidation: jumped from 70.0 kg (6 days ago) to 72.5 kg (3 days ago) at Hard (4) effort
+    # -> holds 72.5 kg to consolidate the recent jump before adding more weight
+    comp_log.date = today - timedelta(days=6)
+    comp_log.weight_kg = 70.0
+    comp_log.reps = 8
+    comp_log.effort_rating = 3
+    recent_jump = Exercise(
+        user_id=test_user.id,
+        date=today - timedelta(days=3),
+        name="Bench Press",
+        category="strength",
+        exercise_catalog_id=bench.id,
+        sets=4,
+        reps=8,
+        weight_kg=72.5,
+        effort_rating=4,  # Hard
+        calories_burned=85.0,
+    )
+    session.add_all([comp_log, recent_jump])
+    session.commit()
+
+    logs = _get_valid_exercise_history(session, test_user.id, bench, today)
+    _, _, _, w_kg, _, note = _prescribe_weighted_strength(
+        bench, bench_mappings, "build_muscle", "intermediate", logs, today,
+    )
+    assert w_kg == 72.5
+    assert "consolidating" in (note or "").lower()
+
+    # 6. Consecutive missed targets at 72.5 kg (6 reps then 5 reps, effort 5) -> deloads to 70.0 kg
+    comp_log.weight_kg = 72.5
+    comp_log.reps = 6
+    comp_log.effort_rating = 5
+    recent_jump.weight_kg = 72.5
+    recent_jump.reps = 5
+    recent_jump.effort_rating = 5
+    session.add_all([comp_log, recent_jump])
+    session.commit()
+
+    logs = _get_valid_exercise_history(session, test_user.id, bench, today)
+    _, _, _, w_kg, _, note = _prescribe_weighted_strength(
+        bench, bench_mappings, "build_muscle", "intermediate", logs, today,
+    )
+    assert w_kg == 70.0
+    assert "reducing load" in (note or "").lower()
+
+    # 7. Isolation exercise with light load (Dumbbell Curl @ 10 kg x 12, effort 3)
+    # -> prescribes isolation sets/reps/rest (3 x 12, 75s rest) and +1.0 kg step (11.0 kg)
+    curl_log = Exercise(
+        user_id=test_user.id,
+        date=today - timedelta(days=3),
+        name="Dumbbell Curl",
+        category="strength",
+        exercise_catalog_id=curl.id,
+        sets=3,
+        reps=12,
+        weight_kg=10.0,
+        effort_rating=3,
+        calories_burned=40.0,
+    )
+    session.add(curl_log)
+    session.commit()
+
+    curl_logs = _get_valid_exercise_history(session, test_user.id, curl, today)
+    c_sets, c_reps, c_rest, c_w, _, c_note = _prescribe_weighted_strength(
+        curl, curl_mappings, "build_muscle", "intermediate", curl_logs, today,
+    )
+    assert (c_sets, c_reps, c_rest) == (3, 12, 75)
+    assert c_w == 11.0
+    assert "+1 kg" in (c_note or "")
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 35: Unknown effort never produces unjustified progression
+# ──────────────────────────────────────────────────────────────
+
+def test_35_unknown_effort_never_produces_unjustified_progression(
+    session, test_user,
+):
+    """Even when a user logs multiple consecutive sessions meeting target sets,
+    reps, or duration, unknown effort (effort_rating=None) never triggers
+    load, rep, or duration progression across strength, bodyweight, or cardio."""
+    from src.services.recommendation_service import (
+        _get_valid_exercise_history,
+        _prescribe_bodyweight_strength,
+        _prescribe_cardio,
+        _prescribe_weighted_strength,
+    )
+    from src.services.training_service import get_muscle_mappings
+
+    today = date(2026, 11, 6)
+    mappings = get_muscle_mappings(session)
+
+    bench = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Bench Press")
+    ).first()
+    pushups = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Push-ups")
+    ).first()
+    running = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Running")
+    ).first()
+
+    # Log 3 consecutive sessions of Bench Press (80 kg x 10), Push-ups (3 x 14), Running (30 min)
+    # all with effort_rating=None
+    for d_offset in (6, 4, 2):
+        d = today - timedelta(days=d_offset)
+        session.add_all([
+            Exercise(
+                user_id=test_user.id,
+                date=d,
+                name="Bench Press",
+                category="strength",
+                exercise_catalog_id=bench.id,
+                sets=4,
+                reps=10,
+                weight_kg=80.0,
+                effort_rating=None,
+                calories_burned=90.0,
+            ),
+            Exercise(
+                user_id=test_user.id,
+                date=d,
+                name="Push-ups",
+                category="strength",
+                exercise_catalog_id=pushups.id,
+                sets=3,
+                reps=14,
+                effort_rating=None,
+                calories_burned=45.0,
+            ),
+            Exercise(
+                user_id=test_user.id,
+                date=d,
+                name="Running",
+                category="cardio",
+                exercise_catalog_id=running.id,
+                duration_minutes=30,
+                effort_rating=None,
+                calories_burned=250.0,
+            ),
+        ])
+    session.commit()
+
+    # Weighted strength: stays at 80.0 kg (never 82.5 kg)
+    b_logs = _get_valid_exercise_history(session, test_user.id, bench, today)
+    _, _, _, b_weight, _, b_note = _prescribe_weighted_strength(
+        bench, mappings.get(bench.id, []), "build_muscle", "intermediate", b_logs, today,
+    )
+    assert b_weight == 80.0
+    assert "effort rating was not recorded" in (b_note or "").lower()
+
+    # Bodyweight strength: stays at 14 reps (never progresses to 16)
+    p_logs = _get_valid_exercise_history(session, test_user.id, pushups, today)
+    p_sets, p_reps, _, _, _, p_note = _prescribe_bodyweight_strength(
+        pushups, "intermediate", p_logs, today,
+    )
+    assert p_sets == 3
+    assert p_reps == 14
+    assert "unknown" in (p_note or "").lower()
+
+    # Cardio: stays at 30 min (never progresses to 35 min for build_muscle)
+    r_logs = _get_valid_exercise_history(session, test_user.id, running, today)
+    r_dur, _, _, r_note = _prescribe_cardio(
+        running, "build_muscle", "intermediate", r_logs, today,
+    )
+    assert r_dur == 30
+    assert r_note is None
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 36: Cardio and bodyweight prescriptions stay within reasonable bounds
+# ──────────────────────────────────────────────────────────────
+
+def test_36_cardio_and_bodyweight_prescriptions_stay_within_reasonable_bounds(
+    session, test_user,
+):
+    """Cardio and bodyweight prescriptions stay within reasonable bounds
+    even when historical records have extreme low or high values, and
+    include appropriate duration, sets, reps, and rest recommendations."""
+    from src.services.recommendation_service import (
+        BODYWEIGHT_HARD_REP_BOUNDS,
+        BODYWEIGHT_HOLD_DURATION_BOUNDS,
+        BODYWEIGHT_SETS_BOUNDS,
+        BODYWEIGHT_STANDARD_REP_BOUNDS,
+        CARDIO_HIIT_DURATION_BOUNDS,
+        CARDIO_STEADY_DURATION_BOUNDS,
+        _get_valid_exercise_history,
+        _prescribe_bodyweight_strength,
+        _prescribe_cardio,
+    )
+
+    today = date(2026, 11, 6)
+
+    pushups = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Push-ups")
+    ).first()
+    pullups = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Pull-ups")
+    ).first()
+    plank = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Plank")
+    ).first()
+    running = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Running")
+    ).first()
+    hiit = ExerciseCatalogItem(
+        name="HIIT",
+        category="cardio",
+        default_met=8.0,
+        equipment="bodyweight",
+        level="intermediate",
+        description="High-Intensity Interval Training",
+    )
+    session.add(hiit)
+    session.commit()
+    session.refresh(hiit)
+
+    # 1. Isometric bodyweight hold (Plank): bounded sets (2-4), reps=1, duration (1-3 min), rest=60s
+    for exp in ("beginner", "intermediate", "advanced"):
+        s, r, dur, rest_s, _, _ = _prescribe_bodyweight_strength(plank, exp, [], today)
+        assert BODYWEIGHT_SETS_BOUNDS[0] <= s <= BODYWEIGHT_SETS_BOUNDS[1]
+        assert r == 1
+        assert dur is not None and BODYWEIGHT_HOLD_DURATION_BOUNDS[0] <= dur <= BODYWEIGHT_HOLD_DURATION_BOUNDS[1]
+        assert rest_s == 60
+
+    # 2. Extreme high bodyweight log (Push-ups: 10 sets x 100 reps, effort=1)
+    # -> clamped strictly to BODYWEIGHT_SETS_BOUNDS (<=4) and BODYWEIGHT_STANDARD_REP_BOUNDS (<=20)
+    session.add(
+        Exercise(
+            user_id=test_user.id,
+            date=today - timedelta(days=2),
+            name="Push-ups",
+            category="strength",
+            exercise_catalog_id=pushups.id,
+            sets=10,
+            reps=100,
+            effort_rating=1,
+            calories_burned=100.0,
+        )
+    )
+    # 3. Extreme low Pull-ups log (1 set x 1 rep, effort=5)
+    # -> clamped strictly to >= BODYWEIGHT_SETS_BOUNDS[0] (2) and >= BODYWEIGHT_HARD_REP_BOUNDS[0] (4)
+    session.add(
+        Exercise(
+            user_id=test_user.id,
+            date=today - timedelta(days=2),
+            name="Pull-ups",
+            category="strength",
+            exercise_catalog_id=pullups.id,
+            sets=1,
+            reps=1,
+            effort_rating=5,
+            calories_burned=10.0,
+        )
+    )
+    # 4. Extreme cardio logs: Running 180 min (effort=1) and HIIT 90 min (effort=1)
+    session.add_all([
+        Exercise(
+            user_id=test_user.id,
+            date=today - timedelta(days=2),
+            name="Running",
+            category="cardio",
+            exercise_catalog_id=running.id,
+            duration_minutes=180,
+            effort_rating=1,
+            calories_burned=1200.0,
+        ),
+        Exercise(
+            user_id=test_user.id,
+            date=today - timedelta(days=2),
+            name="HIIT",
+            category="cardio",
+            exercise_catalog_id=hiit.id,
+            duration_minutes=90,
+            effort_rating=1,
+            calories_burned=800.0,
+        ),
+    ])
+    session.commit()
+
+    push_logs = _get_valid_exercise_history(session, test_user.id, pushups, today)
+    ps, pr, pdur, prest, _, _ = _prescribe_bodyweight_strength(pushups, "intermediate", push_logs, today)
+    assert BODYWEIGHT_SETS_BOUNDS[0] <= ps <= BODYWEIGHT_SETS_BOUNDS[1]
+    assert BODYWEIGHT_STANDARD_REP_BOUNDS[0] <= pr <= BODYWEIGHT_STANDARD_REP_BOUNDS[1]
+    assert pdur is None
+    assert prest == 60
+
+    pull_logs = _get_valid_exercise_history(session, test_user.id, pullups, today)
+    ulls, ullr, _, ullrest, _, _ = _prescribe_bodyweight_strength(pullups, "intermediate", pull_logs, today)
+    assert BODYWEIGHT_SETS_BOUNDS[0] <= ulls <= BODYWEIGHT_SETS_BOUNDS[1]
+    assert BODYWEIGHT_HARD_REP_BOUNDS[0] <= ullr <= BODYWEIGHT_HARD_REP_BOUNDS[1]
+    assert ullrest == 90
+
+    run_logs = _get_valid_exercise_history(session, test_user.id, running, today)
+    run_dur, run_rest, _, _ = _prescribe_cardio(running, "improve_endurance", "advanced", run_logs, today)
+    assert CARDIO_STEADY_DURATION_BOUNDS[0] <= run_dur <= CARDIO_STEADY_DURATION_BOUNDS[1]
+    assert run_rest is None
+
+    hiit_logs = _get_valid_exercise_history(session, test_user.id, hiit, today)
+    hiit_dur, hiit_rest, _, _ = _prescribe_cardio(hiit, "lose_weight", "advanced", hiit_logs, today)
+    assert CARDIO_HIIT_DURATION_BOUNDS[0] <= hiit_dur <= CARDIO_HIIT_DURATION_BOUNDS[1]
+    assert hiit_rest == 60
+
+
+
 
 
 

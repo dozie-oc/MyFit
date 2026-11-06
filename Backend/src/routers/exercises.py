@@ -771,7 +771,7 @@ def create_exercise(
         duration_minutes=exercise_data.duration_minutes,
         distance_km=exercise_data.distance_km,
         intensity=exercise_data.intensity,
-        rir=exercise_data.rir,
+        effort_rating=exercise_data.effort_rating,
         calories_burned_per_minute=round(rate, 2),
         calories_burned=calories_burned,
     )

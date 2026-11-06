@@ -10,7 +10,7 @@ No LLM, no ML model. Pure deterministic rule-based logic.
 
 from datetime import date as Date, timedelta
 import zlib
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlmodel import Session, select
 
 from src.models import (
@@ -20,6 +20,7 @@ from src.models import (
     Meal,
     User,
     UserGoal,
+    WorkoutSession,
 )
 from src.schemas import RecommendationItem, RecommendationResponse
 from src.services.exercise_access import visible_exercise
@@ -341,24 +342,82 @@ def _recommend_meal(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# EXERCISE RECOMMENDATION
+# EXERCISE RECOMMENDATION & EQUIPMENT COMPATIBILITY
 # ──────────────────────────────────────────────────────────────────────
 
-_EQUIP_SYNONYMS = {
+EQUIPMENT_CANONICAL: dict[str, str] = {
+    "barbell": "barbell",
+    "barbells": "barbell",
+    "dumbbell": "dumbbell",
     "dumbbells": "dumbbell",
     "machine": "machines",
+    "machines": "machines",
     "cable": "cables",
+    "cables": "cables",
     "band": "bands",
+    "bands": "bands",
+    "resistance band": "bands",
+    "resistance bands": "bands",
+    "kettlebell": "kettlebell",
     "kettlebells": "kettlebell",
+    "bodyweight": "bodyweight",
+    "body weight": "bodyweight",
+    "bodyweight only": "bodyweight",
+    "none": "bodyweight",
+    "no equipment": "bodyweight",
 }
 
 
-def _equipment_ok(item_equipment: str, user_equipment: set[str]) -> bool:
+def normalize_equipment_set(equipment_str: str | None) -> set[str]:
+    """Parse and canonicalize user's comma-separated equipment string."""
+    if not equipment_str or not equipment_str.strip():
+        return set()
+    raw_tokens = [e.strip().lower() for e in equipment_str.split(",") if e.strip()]
+    normalized: set[str] = set()
+    for token in raw_tokens:
+        canon = EQUIPMENT_CANONICAL.get(token, token)
+        normalized.add(canon)
+    return normalized
+
+
+def is_equipment_compatible(item_equipment: str | None, user_equipment: set[str]) -> bool:
+    """
+    Check if an exercise's required equipment is compatible with what the user has.
+
+    Rules:
+    - If user specified no equipment restrictions (empty user_equipment), all exercises are allowed.
+    - If user specified "none" or "bodyweight", ONLY bodyweight exercises are allowed.
+    - "bodyweight" exercises require no equipment and are ALWAYS compatible for any user.
+    - Multi-option catalog equipment (joined by "|", e.g. "barbell|dumbbell") is compatible
+      if the user has at least one of those pieces of equipment.
+    """
     if not user_equipment:
         return True
-    have = {_EQUIP_SYNONYMS.get(e, e) for e in user_equipment} - {"none"}
-    options = set(item_equipment.split("|"))
-    return "bodyweight" in options or bool(options & have)
+
+    user_have = {EQUIPMENT_CANONICAL.get(e, e) for e in user_equipment}
+    allowed_gear = user_have - {"bodyweight"}
+
+    item_str = (item_equipment or "bodyweight").lower().strip()
+    item_options = {
+        EQUIPMENT_CANONICAL.get(part.strip(), part.strip())
+        for part in item_str.split("|")
+        if part.strip()
+    }
+
+    # Bodyweight exercises are universally doable
+    if "bodyweight" in item_options:
+        return True
+
+    # If the user only has bodyweight/none, non-bodyweight exercises are excluded
+    if not allowed_gear:
+        return False
+
+    return bool(item_options & allowed_gear)
+
+
+def _equipment_ok(item_equipment: str | None, user_equipment: set[str]) -> bool:
+    """Backwards-compatible wrapper around is_equipment_compatible."""
+    return is_equipment_compatible(item_equipment, user_equipment)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -501,7 +560,15 @@ def get_recommendation(
             ),
         )
 
-    # Case 2: Nothing logged yet today
+    # Case 2: In-progress incomplete workout
+    # If the user has started a workout today and it is not adequate yet,
+    # prioritize the workout over meal suggestions (do not prematurely suppress with dinner).
+    if sessions_today > 0 and not exercise_done:
+        return _recommend_exercise_with_adequacy(
+            session, user, goal, today_exercises, adequacy, today=today
+        )
+
+    # Case 3: Nothing logged yet today
     # Recommend starting the day with Breakfast!
     logged_types = {
         m.meal_type.lower()
@@ -514,26 +581,26 @@ def get_recommendation(
             session, user, goal, today_meals, cal_remaining, protein_remaining
         )
 
-    # Case 3: Breakfast logged, but workout not completed yet
-    # Natural flow: eat breakfast -> do workout!
-    if "breakfast" in logged_types and not exercise_done:
+    # Case 4: Breakfast or lunch logged, but workout not completed yet
+    # Natural flow: fuel up -> do workout!
+    if not exercise_done and ("breakfast" in logged_types or "lunch" in logged_types):
         return _recommend_exercise_with_adequacy(
             session, user, goal, today_exercises, adequacy, today=today
         )
 
-    # Case 4: Exercise done, next meal needed
+    # Case 5: Exercise done, next meal needed
     if exercise_done and not nutrition_done and cal_remaining >= MIN_CALORIE_REMAINING:
         return _recommend_meal(
             session, user, goal, today_meals, cal_remaining, protein_remaining
         )
 
-    # Case 5: Nutrition not done, calories remain
+    # Case 6: Nutrition not done, calories remain
     if not nutrition_done and cal_remaining >= MIN_CALORIE_REMAINING:
         return _recommend_meal(
             session, user, goal, today_meals, cal_remaining, protein_remaining
         )
 
-    # Case 6: Nutrition is done, but exercise remains
+    # Case 7: Nutrition is done, but exercise remains
     if not exercise_done:
         return _recommend_exercise_with_adequacy(
             session, user, goal, today_exercises, adequacy, today=today
@@ -545,6 +612,545 @@ def get_recommendation(
         type="none",
         reason="You're on track for today – both your nutrition and workout look good!",
     )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# PRESCRIPTION BOUNDS & PROGRESSION HELPERS
+# ──────────────────────────────────────────────────────────────────────
+
+STRENGTH_SETS_BOUNDS: tuple[int, int] = (2, 5)
+STRENGTH_COMPOUND_REP_BOUNDS: tuple[int, int] = (4, 12)
+STRENGTH_ISOLATION_REP_BOUNDS: tuple[int, int] = (8, 15)
+STRENGTH_REST_BOUNDS_SECONDS: tuple[int, int] = (60, 180)
+
+BODYWEIGHT_SETS_BOUNDS: tuple[int, int] = (2, 4)
+BODYWEIGHT_HARD_REP_BOUNDS: tuple[int, int] = (4, 12)
+BODYWEIGHT_STANDARD_REP_BOUNDS: tuple[int, int] = (8, 20)
+BODYWEIGHT_HOLD_DURATION_BOUNDS: tuple[int, int] = (1, 3)
+
+CARDIO_HIIT_DURATION_BOUNDS: tuple[int, int] = (10, 25)
+CARDIO_STEADY_DURATION_BOUNDS: tuple[int, int] = (15, 45)
+FLEXIBILITY_DURATION_BOUNDS: tuple[int, int] = (10, 30)
+
+# Maximum days since last comparable session before progression is held back as stale
+MAX_COMPARABLE_HISTORY_DAYS = 21
+
+ISOMETRIC_HOLD_NAMES: set[str] = {"plank", "side plank", "dead hang"}
+HIGH_DIFFICULTY_BODYWEIGHT_NAMES: set[str] = {
+    "pull-ups",
+    "chin-ups",
+    "dips",
+    "pike push-ups",
+    "hanging leg raise",
+    "planche push-up",
+}
+HIGH_INTENSITY_CARDIO_NAMES: set[str] = {
+    "hiit",
+    "burpees",
+    "jump rope",
+    "mountain climbers",
+    "jumping jacks",
+    "boxing",
+    "stair climber",
+}
+
+
+def _clamp_int(val: int, bounds: tuple[int, int]) -> int:
+    return max(bounds[0], min(bounds[1], int(val)))
+
+
+def _format_days_ago(today: Date, log_date: Date) -> str:
+    days_ago = (today - log_date).days
+    if days_ago <= 0:
+        return "today"
+    if days_ago == 1:
+        return "1 day ago"
+    return f"{days_ago} days ago"
+
+
+def _is_isometric_hold(item: ExerciseCatalogItem) -> bool:
+    name_lower = (item.name or "").strip().lower()
+    return (
+        name_lower in ISOMETRIC_HOLD_NAMES
+        or "plank" in name_lower
+        or "dead hang" in name_lower
+    )
+
+
+def _is_high_difficulty_bodyweight(item: ExerciseCatalogItem) -> bool:
+    name_lower = (item.name or "").strip().lower()
+    return name_lower in HIGH_DIFFICULTY_BODYWEIGHT_NAMES
+
+
+def _is_bodyweight_prescription(
+    item: ExerciseCatalogItem,
+    user_equipment: set[str],
+) -> bool:
+    item_str = (item.equipment or "bodyweight").lower().strip()
+    item_options = {
+        EQUIPMENT_CANONICAL.get(part.strip(), part.strip())
+        for part in item_str.split("|")
+        if part.strip()
+    }
+    non_bw_options = item_options - {"bodyweight"}
+    if not non_bw_options:
+        return True
+    if not user_equipment:
+        return False
+    user_have = {EQUIPMENT_CANONICAL.get(e, e) for e in user_equipment} - {"bodyweight"}
+    return not bool(non_bw_options & user_have)
+
+
+def _is_isolation_exercise(item: ExerciseCatalogItem, mappings: list) -> bool:
+    primaries = [m for m in mappings if m.role == "primary"]
+    if any((m.movement_pattern or "").lower() == "isolation" for m in primaries):
+        return True
+    primary_groups = {m.muscle_group for m in primaries}
+    if primary_groups and primary_groups.issubset({"biceps", "triceps", "forearms", "calves"}):
+        return True
+    return False
+
+
+def _is_high_intensity_cardio(item: ExerciseCatalogItem) -> bool:
+    name_lower = (item.name or "").strip().lower()
+    return name_lower in HIGH_INTENSITY_CARDIO_NAMES
+
+
+def _get_valid_exercise_history(
+    session: Session,
+    user_id: int,
+    item: ExerciseCatalogItem,
+    today: Date,
+) -> list[Exercise]:
+    """
+    Fetch valid historical logs for `item` up to `today`, excluding soft-deleted
+    rows, logs linked to a different catalog item, and logs in abandoned sessions.
+    """
+    name_lower = (item.name or "").strip().lower()
+    if item.id is not None:
+        match_cond = or_(
+            Exercise.exercise_catalog_id == item.id,
+            and_(
+                Exercise.exercise_catalog_id.is_(None),
+                func.lower(Exercise.name) == name_lower,
+            ),
+        )
+    else:
+        match_cond = func.lower(Exercise.name) == name_lower
+
+    abandoned_ids = set(
+        session.exec(
+            select(WorkoutSession.id).where(
+                WorkoutSession.user_id == user_id,
+                WorkoutSession.status == "abandoned",
+            )
+        ).all()
+    )
+
+    rows = session.exec(
+        select(Exercise)
+        .where(
+            Exercise.user_id == user_id,
+            Exercise.deleted_at.is_(None),
+            Exercise.date <= today,
+            match_cond,
+        )
+        .order_by(Exercise.date.desc(), Exercise.id.desc())
+    ).all()
+
+    return [
+        r for r in rows
+        if r.workout_session_id is None or r.workout_session_id not in abandoned_ids
+    ]
+
+
+def _is_comparable_weighted_log(ex: Exercise, target_reps: int) -> bool:
+    """
+    A weighted strength log is comparable to `target_reps` only when:
+    - weight_kg > 0 and reps > 0
+    - sets is None or within [1, 10]
+    - reps is within a comparable working band around `target_reps`
+      (excludes 1-2 rep max tests and ultra-high-rep warmups/burnouts).
+    """
+    if ex.weight_kg is None or ex.weight_kg <= 0:
+        return False
+    if ex.reps is None or ex.reps <= 0:
+        return False
+    if ex.sets is not None and (ex.sets <= 0 or ex.sets > 10):
+        return False
+
+    min_comp_reps = max(3 if target_reps >= 5 else 2, target_reps - 4)
+    max_comp_reps = target_reps + 6
+    return min_comp_reps <= ex.reps <= max_comp_reps
+
+
+def _conservative_load_step(weight_kg: float, is_isolation: bool) -> float:
+    """
+    Determine a conservative load increment/decrement step (rounded to 0.5 kg)
+    that never exceeds 10% of the working weight or 2.5 kg.
+    """
+    base_step = 1.0 if (weight_kg < 15.0 or (is_isolation and weight_kg < 20.0)) else 2.5
+    max_pct_step = max(0.5, round((weight_kg * 0.10) * 2.0) / 2.0)
+    return min(base_step, max_pct_step)
+
+
+def _prescribe_weighted_strength(
+    item: ExerciseCatalogItem,
+    mappings: list,
+    goal_type: str,
+    experience: str,
+    history_logs: list[Exercise],
+    today: Date,
+) -> tuple[int, int, int, float | None, str | None, str | None]:
+    """
+    Return (sets, reps, rest_seconds, suggested_weight_kg, last_performance, progression_note)
+    for a weighted strength exercise using comparable past performance and trends.
+    """
+    from src.services.training_service import EFFORT_RATING_LABELS
+
+    is_iso = _is_isolation_exercise(item, mappings)
+
+    if is_iso:
+        if experience == "beginner":
+            base_sets, base_reps, rest_sec = 3, 10, 60
+        elif experience == "intermediate":
+            base_sets, base_reps, rest_sec = 3, (10 if goal_type == "get_stronger" else 12), 75
+        else:
+            base_sets, base_reps, rest_sec = 4, (10 if goal_type == "get_stronger" else 12), 90
+        sets = _clamp_int(base_sets, (2, 4))
+        reps = _clamp_int(base_reps, STRENGTH_ISOLATION_REP_BOUNDS)
+    else:
+        if experience == "beginner":
+            base_sets = 3
+            base_reps = 8 if goal_type == "get_stronger" else 10
+            rest_sec = 120 if goal_type == "get_stronger" else 90
+        elif experience == "intermediate":
+            base_sets = 4
+            base_reps = 6 if goal_type == "get_stronger" else 8
+            rest_sec = 150 if goal_type == "get_stronger" else 120
+        else:
+            base_sets = 5 if goal_type in ("get_stronger", "build_muscle", "gain_weight") else 4
+            base_reps = 5 if goal_type in ("get_stronger", "build_muscle", "gain_weight") else 6
+            rest_sec = 180 if goal_type == "get_stronger" else 150
+        sets = _clamp_int(base_sets, STRENGTH_SETS_BOUNDS)
+        reps = _clamp_int(base_reps, STRENGTH_COMPOUND_REP_BOUNDS)
+
+    rest_sec = _clamp_int(rest_sec, STRENGTH_REST_BOUNDS_SECONDS)
+
+    weighted_logs = [
+        e for e in history_logs
+        if e.weight_kg is not None and e.weight_kg > 0
+    ]
+    if not weighted_logs:
+        return sets, reps, rest_sec, None, None, None
+
+    comparable_logs = [
+        e for e in weighted_logs
+        if _is_comparable_weighted_log(e, reps)
+    ]
+
+    if not comparable_logs:
+        non_comp = weighted_logs[0]
+        when_str = _format_days_ago(today, non_comp.date)
+        effort_label = (
+            EFFORT_RATING_LABELS.get(non_comp.effort_rating)
+            if non_comp.effort_rating is not None
+            else None
+        )
+        effort_str = f" ({effort_label})" if effort_label else ""
+        last_perf = (
+            f"Last time: {non_comp.weight_kg:g} kg x "
+            f"{non_comp.reps or 0}{effort_str}, {when_str}"
+        )
+        prog_note = (
+            f"Prior log ({non_comp.weight_kg:g} kg × {non_comp.reps or 0}) used a non-comparable "
+            f"rep scheme for a {reps}-rep target, so no automatic load progression is applied"
+        )
+        return sets, reps, rest_sec, None, last_perf, prog_note
+
+    latest = comparable_logs[0]
+    prev = comparable_logs[1] if len(comparable_logs) >= 2 else None
+    days_ago = (today - latest.date).days
+    when_str = _format_days_ago(today, latest.date)
+    effort_label = (
+        EFFORT_RATING_LABELS.get(latest.effort_rating)
+        if latest.effort_rating is not None
+        else None
+    )
+    effort_str = f" ({effort_label})" if effort_label else ""
+    last_perf = (
+        f"Last time: {latest.weight_kg:g} kg x "
+        f"{latest.reps or 0}{effort_str}, {when_str}"
+    )
+
+    step_kg = _conservative_load_step(latest.weight_kg, is_iso)
+    min_required_sets = max(2, sets - 1)
+    sets_completed_ok = latest.sets is None or latest.sets >= min_required_sets
+
+    # 1. Stale comparable history (> 21 days ago): hold weight conservatively
+    if days_ago > MAX_COMPARABLE_HISTORY_DAYS:
+        suggested_weight = round(latest.weight_kg * 2.0) / 2.0
+        prog_note = (
+            f"Maintaining {suggested_weight:g} kg because your last comparable session "
+            f"was {days_ago} days ago"
+        )
+        return sets, reps, rest_sec, suggested_weight, last_perf, prog_note
+
+    # 2. Multi-session downward trend / consecutive missed targets at same or higher weight -> conservative deload
+    if (
+        prev is not None
+        and (latest.date - prev.date).days <= 28
+        and latest.reps is not None
+        and prev.reps is not None
+        and latest.reps < reps
+        and prev.reps < reps
+        and prev.weight_kg is not None
+        and prev.weight_kg >= latest.weight_kg
+        and (
+            latest.effort_rating in (4, 5)
+            or prev.effort_rating in (4, 5)
+            or latest.reps < prev.reps
+        )
+    ):
+        raw_w = max(2.5, latest.weight_kg - step_kg)
+        suggested_weight = round(raw_w * 2.0) / 2.0
+        prog_note = (
+            f"Recent trend shows missed target reps across consecutive sessions; "
+            f"conservatively reducing load to {suggested_weight:g} kg (-{step_kg:g} kg) to rebuild volume"
+        )
+        return sets, reps, rest_sec, suggested_weight, last_perf, prog_note
+
+    # 3. Latest session missed target reps -> hold weight
+    if latest.reps is None or latest.reps < reps:
+        suggested_weight = round(latest.weight_kg * 2.0) / 2.0
+        prog_note = (
+            f"Maintaining {suggested_weight:g} kg until all {reps} target reps are achieved"
+        )
+        return sets, reps, rest_sec, suggested_weight, last_perf, prog_note
+
+    # 4. Latest session had insufficient working sets -> hold weight to complete set volume
+    if not sets_completed_ok:
+        suggested_weight = round(latest.weight_kg * 2.0) / 2.0
+        prog_note = (
+            f"Maintaining {suggested_weight:g} kg to build up to {sets} working sets "
+            f"(completed {latest.sets} set(s) last time)"
+        )
+        return sets, reps, rest_sec, suggested_weight, last_perf, prog_note
+
+    # 5. Unknown effort rating -> never treat unknown effort as a known manageable rating
+    if latest.effort_rating is None:
+        suggested_weight = round(latest.weight_kg * 2.0) / 2.0
+        prog_note = (
+            f"Maintaining {suggested_weight:g} kg because effort rating was not recorded "
+            "on your last comparable session"
+        )
+        return sets, reps, rest_sec, suggested_weight, last_perf, prog_note
+
+    # 6. Extremely Hard effort (5) -> hold weight to consolidate form
+    if latest.effort_rating >= 5:
+        suggested_weight = round(latest.weight_kg * 2.0) / 2.0
+        prog_note = (
+            f"Maintaining {suggested_weight:g} kg to consolidate form after an Extremely Hard session"
+        )
+        return sets, reps, rest_sec, suggested_weight, last_perf, prog_note
+
+    # 7. Trend consolidation: if user just increased load or recovered from a prior miss/max-effort session
+    # and the latest session was still Hard (4), hold weight for one more session before adding more load.
+    if (
+        prev is not None
+        and (latest.date - prev.date).days <= MAX_COMPARABLE_HISTORY_DAYS
+        and latest.effort_rating == 4
+        and prev.weight_kg is not None
+    ):
+        if latest.weight_kg > prev.weight_kg:
+            suggested_weight = round(latest.weight_kg * 2.0) / 2.0
+            prog_note = (
+                f"Consolidating recent load increase at {suggested_weight:g} kg (rated Hard) "
+                "before progressing further"
+            )
+            return sets, reps, rest_sec, suggested_weight, last_perf, prog_note
+        if (prev.reps is not None and prev.reps < reps) or prev.effort_rating == 5:
+            suggested_weight = round(latest.weight_kg * 2.0) / 2.0
+            prog_note = (
+                f"Consolidating {suggested_weight:g} kg after recovering from a tough prior session"
+            )
+            return sets, reps, rest_sec, suggested_weight, last_perf, prog_note
+
+    # 8. Manageable effort (1-4) with target reps & sets completed -> conservative load increase
+    raw_w = latest.weight_kg + step_kg
+    suggested_weight = round(raw_w * 2.0) / 2.0
+    prog_note = (
+        f"Conservatively progressing to {suggested_weight:g} kg (+{step_kg:g} kg) "
+        f"based on completing {latest.reps} reps with {effort_label} effort"
+    )
+    return sets, reps, rest_sec, suggested_weight, last_perf, prog_note
+
+
+def _prescribe_bodyweight_strength(
+    item: ExerciseCatalogItem,
+    experience: str,
+    history_logs: list[Exercise],
+    today: Date,
+) -> tuple[int, int, int | None, int, str | None, str | None]:
+    """
+    Return (sets, reps, duration_minutes, rest_seconds, last_performance, progression_note)
+    for a bodyweight strength exercise, enforcing sensible bounds on sets, reps, duration, and rest.
+    """
+    from src.services.training_service import EFFORT_RATING_LABELS
+
+    if _is_isometric_hold(item):
+        base_sets = 3 if experience in ("beginner", "intermediate") else 4
+        base_dur = 1 if experience == "beginner" else (2 if experience == "intermediate" else 3)
+        sets = _clamp_int(base_sets, BODYWEIGHT_SETS_BOUNDS)
+        duration = _clamp_int(base_dur, BODYWEIGHT_HOLD_DURATION_BOUNDS)
+        return sets, 1, duration, 60, None, None
+
+    is_hard_bw = _is_high_difficulty_bodyweight(item)
+    rep_bounds = BODYWEIGHT_HARD_REP_BOUNDS if is_hard_bw else BODYWEIGHT_STANDARD_REP_BOUNDS
+
+    if is_hard_bw:
+        base_sets = 3 if experience in ("beginner", "intermediate") else 4
+        base_reps = 6 if experience == "beginner" else (8 if experience == "intermediate" else 10)
+        rest_sec = 90 if experience in ("beginner", "intermediate") else 120
+    else:
+        base_sets = 3 if experience in ("beginner", "intermediate") else 4
+        base_reps = 10 if experience == "beginner" else (12 if experience == "intermediate" else 15)
+        rest_sec = 60 if experience in ("beginner", "intermediate") else 75
+
+    sets = _clamp_int(base_sets, BODYWEIGHT_SETS_BOUNDS)
+    reps = _clamp_int(base_reps, rep_bounds)
+    rest_sec = _clamp_int(rest_sec, STRENGTH_REST_BOUNDS_SECONDS)
+
+    bw_logs = [
+        e for e in history_logs
+        if (e.weight_kg is None or e.weight_kg == 0)
+        and e.reps is not None
+        and e.reps > 0
+        and (e.sets is None or e.sets > 0)
+    ]
+    if not bw_logs:
+        return sets, reps, None, rest_sec, None, None
+
+    latest = bw_logs[0]
+    days_ago = (today - latest.date).days
+    when_str = _format_days_ago(today, latest.date)
+    effort_label = (
+        EFFORT_RATING_LABELS.get(latest.effort_rating)
+        if latest.effort_rating is not None
+        else None
+    )
+    effort_str = f" ({effort_label})" if effort_label else ""
+    last_perf = f"Last time: {latest.sets or sets} sets x {latest.reps} reps{effort_str}, {when_str}"
+
+    # Clamp historical reference reps/sets to sensible bodyweight bounds
+    ref_reps = _clamp_int(latest.reps, rep_bounds)
+    ref_sets = _clamp_int(latest.sets or sets, BODYWEIGHT_SETS_BOUNDS)
+
+    if days_ago > MAX_COMPARABLE_HISTORY_DAYS:
+        return sets, ref_reps, None, rest_sec, last_perf, (
+            f"Maintaining {sets}×{ref_reps} within bodyweight bounds after {days_ago} days away"
+        )
+
+    if latest.effort_rating is None:
+        return sets, max(reps, ref_reps), None, rest_sec, last_perf, (
+            "Maintaining bodyweight prescription because effort rating was unknown last time"
+        )
+
+    if latest.effort_rating >= 5 or latest.reps < base_reps:
+        return sets, ref_reps, None, rest_sec, last_perf, (
+            f"Maintaining {sets}×{ref_reps} reps to consolidate bodyweight form"
+        )
+
+    # Known manageable effort (1-4): progress reps conservatively within rep_bounds, then sets up to 4
+    rep_step = 2 if latest.effort_rating <= 3 else 1
+    if ref_reps < rep_bounds[1]:
+        new_reps = _clamp_int(max(reps, ref_reps) + rep_step, rep_bounds)
+        prog_note = (
+            f"Progressing bodyweight volume to {sets}×{new_reps} reps "
+            f"after {effort_label} effort"
+        )
+        return sets, new_reps, None, rest_sec, last_perf, prog_note
+
+    new_sets = _clamp_int(max(sets, ref_sets) + 1, BODYWEIGHT_SETS_BOUNDS)
+    prog_note = (
+        f"At the {rep_bounds[1]}-rep bodyweight ceiling; prescribing {new_sets}×{rep_bounds[1]} reps"
+    )
+    return new_sets, rep_bounds[1], None, rest_sec, last_perf, prog_note
+
+
+def _prescribe_cardio(
+    item: ExerciseCatalogItem,
+    goal_type: str,
+    experience: str,
+    history_logs: list[Exercise],
+    today: Date,
+) -> tuple[int, int | None, str | None, str | None]:
+    """
+    Return (duration_minutes, rest_seconds, last_performance, progression_note)
+    for a cardio exercise, enforcing sensible bounds for steady-state vs HIIT cardio.
+    """
+    from src.services.training_service import EFFORT_RATING_LABELS
+
+    is_hiit = _is_high_intensity_cardio(item)
+    bounds = CARDIO_HIIT_DURATION_BOUNDS if is_hiit else CARDIO_STEADY_DURATION_BOUNDS
+    rest_sec = 60 if is_hiit else None
+
+    if is_hiit:
+        if experience == "beginner":
+            base_dur = 15
+        elif experience == "intermediate":
+            base_dur = 20
+        else:
+            base_dur = 25
+    else:
+        if experience == "beginner":
+            base_dur = 25 if goal_type == "improve_endurance" else 20
+        elif experience == "intermediate":
+            base_dur = 35 if goal_type == "improve_endurance" else 30
+        else:
+            base_dur = 45 if goal_type == "improve_endurance" else 40
+
+    duration = _clamp_int(base_dur, bounds)
+
+    cardio_logs = [
+        e for e in history_logs
+        if e.duration_minutes is not None and e.duration_minutes > 0
+    ]
+    if not cardio_logs:
+        return duration, rest_sec, None, None
+
+    latest = cardio_logs[0]
+    days_ago = (today - latest.date).days
+    when_str = _format_days_ago(today, latest.date)
+    effort_label = (
+        EFFORT_RATING_LABELS.get(latest.effort_rating)
+        if latest.effort_rating is not None
+        else None
+    )
+    effort_str = f" ({effort_label})" if effort_label else ""
+    last_perf = f"Last time: {latest.duration_minutes} min{effort_str}, {when_str}"
+
+    # Clamp historical duration to sensible bounds so extreme past logs (e.g. 3 min or 180 min)
+    # never produce an unbounded cardio prescription
+    ref_dur = _clamp_int(latest.duration_minutes, bounds)
+
+    if days_ago > MAX_COMPARABLE_HISTORY_DAYS or latest.effort_rating is None or latest.effort_rating >= 5:
+        target_dur = _clamp_int(max(duration, ref_dur) if latest.effort_rating in (1, 2, 3, 4) else ref_dur, bounds)
+        # Ensure we never drop below base_dur unless latest was a recent valid effort=5 session within bounds
+        if latest.duration_minutes < bounds[0] or latest.effort_rating is None:
+            target_dur = duration
+        return target_dur, rest_sec, last_perf, None
+
+    # Manageable effort (1-4) and met or exceeded base duration -> conservative +5 min within bounds
+    if latest.duration_minutes >= duration and ref_dur < bounds[1]:
+        new_dur = _clamp_int(ref_dur + 5, bounds)
+        prog_note = (
+            f"Conservatively progressing cardio duration to {new_dur} minutes "
+            f"after {effort_label} effort"
+        )
+        return new_dur, rest_sec, last_perf, prog_note
+
+    return _clamp_int(max(duration, ref_dur), bounds), rest_sec, last_perf, None
 
 
 def _recommend_exercise_with_adequacy(
@@ -560,21 +1166,22 @@ def _recommend_exercise_with_adequacy(
 
     Uses training adequacy data to recommend exercises that target
     undertrained muscle groups, respecting the current session's
-    split context.
+    split context, available equipment, experience level, and recent
+    training history. Avoids recommending exercises already completed
+    that day when suitable alternatives exist.
 
-    Handles three distinct scenarios:
-    1. No appropriate exercise available → explain clearly, NOT "workout complete"
-    2. Session adequate → no more recommendations needed
-    3. Session not adequate → recommend next exercise with reasoning
+    Handles distinct scenarios:
+    1. Incompatible equipment or no exercises in catalog -> explain clearly
+    2. All compatible exercises already completed today -> explain clearly
+    3. Session adequate -> no more recommendations needed (recover)
+    4. Session not adequate -> recommend best matching exercise with reasoning
     """
     if today is None:
         today = Date.today()
 
     goal_type = (goal.goal_type if goal else None) or "improve_fitness"
     experience = (goal.training_experience or "beginner").lower() if goal else "beginner"
-    equipment_str = (goal.available_equipment or "") if goal else ""
-    user_equipment = {e.strip().lower() for e in equipment_str.split(",") if e.strip()}
-    done_names = {e.name.lower().strip() for e in today_exercises}
+    user_equipment = normalize_equipment_set(goal.available_equipment if goal else None)
 
     # Load visible catalog for this user
     catalog: list[ExerciseCatalogItem] = session.exec(
@@ -582,7 +1189,6 @@ def _recommend_exercise_with_adequacy(
     ).all()
 
     if not catalog:
-        # No exercises available — NOT the same as "workout complete"
         return RecommendationResponse(
             has_recommendation=False,
             type="none",
@@ -590,29 +1196,63 @@ def _recommend_exercise_with_adequacy(
             items=[],
         )
 
-    # Filter out exercises already done today and incompatible equipment
-    eligible = [
+    # 1. Filter catalog strictly by user equipment compatibility
+    compatible_catalog = [
         item for item in catalog
-        if item.name.lower().strip() not in done_names
-        and _equipment_ok(item.equipment, user_equipment)
+        if is_equipment_compatible(item.equipment, user_equipment)
     ]
 
-    if not eligible:
-        # No suitable exercise available — different from "workout complete"
-        if done_names:
-            return RecommendationResponse(
-                has_recommendation=False,
-                type="none",
-                reason=(
-                    "No additional compatible exercises available in the catalog. "
-                    "You may have covered all available options for today."
-                ),
-                items=[],
-            )
+    if not compatible_catalog:
         return RecommendationResponse(
             has_recommendation=False,
             type="none",
             reason="No exercises in the catalog match your available equipment.",
+            items=[],
+        )
+
+    # 2. Collect ALL exercises completed today by this user across any session or unlinked
+    # (excluding abandoned sessions) to avoid recommending exercises already completed that day
+    today_all = session.exec(
+        select(Exercise).where(
+            Exercise.user_id == user.id,
+            Exercise.date == today,
+            Exercise.deleted_at.is_(None),
+        )
+    ).all()
+    abandoned_today_ids = set(
+        session.exec(
+            select(WorkoutSession.id).where(
+                WorkoutSession.user_id == user.id,
+                WorkoutSession.date == today,
+                WorkoutSession.status == "abandoned",
+            )
+        ).all()
+    )
+    completed_today = [
+        e for e in today_all
+        if e.workout_session_id is None or e.workout_session_id not in abandoned_today_ids
+    ]
+    done_today_names = {e.name.lower().strip() for e in completed_today if e.name}
+    done_today_cat_ids = {e.exercise_catalog_id for e in completed_today if e.exercise_catalog_id is not None}
+
+    # Avoid recommending exercises already completed that day when suitable alternatives exist
+    uncompleted_candidates = [
+        item for item in compatible_catalog
+        if item.name.lower().strip() not in done_today_names
+        and (item.id is None or item.id not in done_today_cat_ids)
+    ]
+
+    if uncompleted_candidates:
+        eligible = uncompleted_candidates
+    else:
+        # All compatible exercises were already completed today!
+        return RecommendationResponse(
+            has_recommendation=False,
+            type="none",
+            reason=(
+                "No additional compatible exercises available in the catalog. "
+                "You may have covered all available options for today."
+            ),
             items=[],
         )
 
@@ -622,22 +1262,30 @@ def _recommend_exercise_with_adequacy(
         _get_relevant_muscles_for_split,
         CARDIO_PRIMARY_GOALS,
         CARDIO_SECONDARY_GOALS,
+        STRENGTH_PRIMARY_GOALS,
+        MAJOR_MUSCLE_GROUPS,
+        UPPER_MUSCLE_GROUPS,
+        LOWER_MUSCLE_GROUPS,
     )
 
     mappings_by_catalog_id = get_muscle_mappings(session)
     target_muscles = _get_relevant_muscles_for_split(adequacy.detected_split)
 
-    # Find the most undertrained muscles relevant to the current split
+    # Find the most undertrained muscles relevant to the current split, prioritizing major muscle groups
     undertrained_muscles = sorted(
         [
             mv for mv in adequacy.muscle_volumes.values()
             if mv.status == "undertrained" and mv.muscle_group in target_muscles
         ],
-        key=lambda mv: mv.effective_sets / max(mv.target_min, 0.1),
+        key=lambda mv: (
+            0 if mv.muscle_group in MAJOR_MUSCLE_GROUPS else 1,
+            mv.effective_sets / max(mv.target_min, 0.1),
+        ),
     )
 
     needed_muscle_set = {mv.muscle_group for mv in undertrained_muscles[:4]}
 
+    # Recent training history (yesterday and 2 days ago)
     recent_exercises = session.exec(
         select(Exercise).where(
             Exercise.user_id == user.id,
@@ -646,42 +1294,63 @@ def _recommend_exercise_with_adequacy(
             Exercise.date <= today - timedelta(days=1),
         )
     ).all()
-    yesterday_ids = {
-        e.exercise_catalog_id
-        for e in recent_exercises
-        if e.date == today - timedelta(days=1) and e.exercise_catalog_id is not None
-    }
-    two_days_ago_ids = {
-        e.exercise_catalog_id
-        for e in recent_exercises
-        if e.date == today - timedelta(days=2) and e.exercise_catalog_id is not None
-    }
+    yesterday_exercises = [e for e in recent_exercises if e.date == today - timedelta(days=1)]
+    two_days_ago_exercises = [e for e in recent_exercises if e.date == today - timedelta(days=2)]
 
-    # Score eligible exercises: prefer those that hit needed muscles
+    yesterday_ids = {e.exercise_catalog_id for e in yesterday_exercises if e.exercise_catalog_id is not None}
+    yesterday_names = {e.name.lower().strip() for e in yesterday_exercises if e.name}
+    two_days_ago_ids = {e.exercise_catalog_id for e in two_days_ago_exercises if e.exercise_catalog_id is not None}
+    two_days_ago_names = {e.name.lower().strip() for e in two_days_ago_exercises if e.name}
+
+    yesterday_worked_muscles: set[str] = set()
+    for e in yesterday_exercises:
+        if e.exercise_catalog_id:
+            for m in mappings_by_catalog_id.get(e.exercise_catalog_id, []):
+                if m.role == "primary":
+                    yesterday_worked_muscles.add(m.muscle_group)
+
+    # Score eligible exercises: prefer those that hit needed muscles and match context
     def _adequacy_score(item: ExerciseCatalogItem) -> float:
         """
         Lower score = better recommendation.
-        Exercises that target needed muscle groups score much lower.
+        Takes into account:
+        - Muscle-group needs (prioritizing undertrained major muscle groups)
+        - Session context (split alignment: upper vs lower)
+        - Goal category (strength vs cardio)
+        - Experience level (beginner vs intermediate vs advanced)
+        - Recent training history (penalizing exercises/muscles worked yesterday / 2 days ago)
         """
         mappings = mappings_by_catalog_id.get(item.id, [])
         primary_muscles = {m.muscle_group for m in mappings if m.role == "primary"}
         secondary_muscles = {m.muscle_group for m in mappings if m.role == "secondary"}
         has_mappings = len(mappings) > 0
 
-        # Primary match is worth more than secondary
+        # Primary match with needed undertrained muscles
         primary_overlap = primary_muscles & needed_muscle_set
         secondary_overlap = secondary_muscles & needed_muscle_set
+        major_primary = primary_muscles & MAJOR_MUSCLE_GROUPS
+        major_bonus = len(major_primary) * 15
 
-        # Score: lower is better
-        muscle_score = 100 - (len(primary_overlap) * 30 + len(secondary_overlap) * 10)
+        muscle_score = 100 - (len(primary_overlap) * 35 + len(secondary_overlap) * 12 + major_bonus)
 
-        # Prefer exercises matching goal categories
+        # ── SESSION CONTEXT: SPLIT ALIGNMENT ──
+        # If the user is in an Upper or Lower session, heavily penalize exercises targeting the opposite region
+        split_penalty = 0
+        if adequacy.detected_split == "upper":
+            if item.category == "strength" and primary_muscles and primary_muscles.issubset(LOWER_MUSCLE_GROUPS):
+                split_penalty = 70
+        elif adequacy.detected_split == "lower":
+            if item.category == "strength" and primary_muscles and primary_muscles.issubset(UPPER_MUSCLE_GROUPS):
+                split_penalty = 70
+
+        # ── GOAL CATEGORY ALIGNMENT ──
         preferred_categories = GOAL_EXERCISE_CATEGORY.get(goal_type, ["cardio", "strength"])
-        cat_bonus = 0 if item.category in preferred_categories else 50
+        cat_bonus = 0 if item.category in preferred_categories else 40
 
-        # For cardio goals, strongly prefer cardio exercises
         if goal_type in CARDIO_PRIMARY_GOALS and item.category == "cardio":
-            cat_bonus = -40
+            cat_bonus = -45
+        elif goal_type in STRENGTH_PRIMARY_GOALS and item.category == "strength":
+            cat_bonus = -25
 
         if (
             goal_type in (CARDIO_PRIMARY_GOALS | CARDIO_SECONDARY_GOALS)
@@ -691,105 +1360,90 @@ def _recommend_exercise_with_adequacy(
         ):
             cat_bonus -= 15
 
-        # Penalise exercises with no muscle mappings slightly —
-        # we can't guarantee they target what's needed
+        # Penalise unmapped strength exercises slightly
         if not has_mappings and item.category == "strength":
             muscle_score += 20
 
-        # Experience-based preference using catalog level
+        # ── EXPERIENCE LEVEL ──
+        item_level = (item.level or "intermediate").lower()
         exp_bonus = 0
         if experience == "beginner":
-            if item.level == "beginner":
-                exp_bonus = -15
-            elif item.level == "advanced":
-                exp_bonus = 15
+            if item_level == "beginner":
+                exp_bonus = -20
+            elif item_level == "advanced":
+                exp_bonus = 25
         elif experience == "intermediate":
-            if item.level == "intermediate":
-                exp_bonus = -10
-        elif experience == "advanced":
-            if item.level == "advanced":
+            if item_level == "intermediate":
                 exp_bonus = -15
-            elif item.level == "beginner":
+            elif item_level == "advanced":
+                exp_bonus = 5
+        elif experience == "advanced":
+            if item_level == "advanced":
+                exp_bonus = -20
+            elif item_level == "beginner":
                 exp_bonus = 10
 
+        # ── RECENT TRAINING HISTORY ──
         recency_penalty = 0
-        if item.id in yesterday_ids:
-            recency_penalty = 25
-        elif item.id in two_days_ago_ids:
+        item_name_lower = (item.name or "").lower().strip()
+        if item.id in yesterday_ids or item_name_lower in yesterday_names:
+            recency_penalty = 35
+        elif item.id in two_days_ago_ids or item_name_lower in two_days_ago_names:
             recency_penalty = 15
+
+        if primary_muscles & yesterday_worked_muscles:
+            recency_penalty += 20
 
         tie_breaker = zlib.crc32(f"{user.id}:{today.isoformat()}:{item.id}".encode()) % 7
 
-        return muscle_score + cat_bonus + exp_bonus + recency_penalty + tie_breaker
+        return muscle_score + split_penalty + cat_bonus + exp_bonus + recency_penalty + tie_breaker
 
     eligible.sort(key=_adequacy_score)
     pick = eligible[0]
+    pick_mappings = mappings_by_catalog_id.get(pick.id, [])
+    history_logs = _get_valid_exercise_history(session, user.id, pick, today)
 
-    # Suggest sets/reps or duration based on category and experience
+    # Suggest sets, reps, duration, weight, and rest based on category, equipment, experience, and history
     sets: int | None = None
     reps: int | None = None
     duration: int | None = None
+    rest_seconds: int | None = None
     suggested_weight: float | None = None
     last_perf: str | None = None
+    progression_note: str | None = None
 
     if pick.category == "strength":
-        if experience == "beginner":
-            sets, reps = 3, 10
-        elif experience == "intermediate":
-            sets, reps = 4, 8
+        if _is_bodyweight_prescription(pick, user_equipment):
+            sets, reps, duration, rest_seconds, last_perf, progression_note = (
+                _prescribe_bodyweight_strength(
+                    item=pick,
+                    experience=experience,
+                    history_logs=history_logs,
+                    today=today,
+                )
+            )
         else:
-            sets, reps = 5, 5
-
-        match_cond = (
-            or_(
-                Exercise.exercise_catalog_id == pick.id,
-                func.lower(Exercise.name) == pick.name.lower(),
-            )
-            if pick.id is not None
-            else (func.lower(Exercise.name) == pick.name.lower())
-        )
-        last_weighted = session.exec(
-            select(Exercise)
-            .where(
-                Exercise.user_id == user.id,
-                Exercise.deleted_at.is_(None),
-                match_cond,
-                Exercise.weight_kg.is_not(None),
-                Exercise.weight_kg > 0,
-            )
-            .order_by(Exercise.date.desc(), Exercise.id.desc())
-        ).first()
-        if last_weighted is not None and last_weighted.weight_kg is not None:
-            target_reps = reps or 8
-            if (
-                last_weighted.reps is not None
-                and last_weighted.reps >= target_reps
-                and (last_weighted.rir is None or last_weighted.rir >= 1)
-            ):
-                raw_w = last_weighted.weight_kg + 2.5
-            else:
-                raw_w = last_weighted.weight_kg
-            suggested_weight = round(raw_w * 2.0) / 2.0
-            days_ago = (today - last_weighted.date).days
-            if days_ago <= 0:
-                when_str = "today"
-            elif days_ago == 1:
-                when_str = "1 day ago"
-            else:
-                when_str = f"{days_ago} days ago"
-            last_perf = (
-                f"Last time: {last_weighted.weight_kg:g} kg x "
-                f"{last_weighted.reps or 0}, {when_str}"
+            sets, reps, rest_seconds, suggested_weight, last_perf, progression_note = (
+                _prescribe_weighted_strength(
+                    item=pick,
+                    mappings=pick_mappings,
+                    goal_type=goal_type,
+                    experience=experience,
+                    history_logs=history_logs,
+                    today=today,
+                )
             )
     elif pick.category == "cardio":
-        if experience == "beginner":
-            duration = 20
-        elif experience == "intermediate":
-            duration = 30
-        else:
-            duration = 45
+        duration, rest_seconds, last_perf, progression_note = _prescribe_cardio(
+            item=pick,
+            goal_type=goal_type,
+            experience=experience,
+            history_logs=history_logs,
+            today=today,
+        )
     elif pick.category == "flexibility":
-        duration = 20 if experience == "beginner" else 30
+        base_flex_dur = 15 if experience == "beginner" else (20 if experience == "intermediate" else 25)
+        duration = _clamp_int(base_flex_dur, FLEXIBILITY_DURATION_BOUNDS)
 
     item = RecommendationItem(
         name=pick.name,
@@ -798,6 +1452,7 @@ def _recommend_exercise_with_adequacy(
         sets=sets,
         reps=reps,
         weight_kg=suggested_weight,
+        rest_seconds=rest_seconds,
         last_performance=last_perf,
         duration_minutes=duration,
         description=pick.description,
@@ -811,17 +1466,18 @@ def _recommend_exercise_with_adequacy(
             detail_parts.append(f"{sets} sets × {reps} reps")
     if duration:
         detail_parts.append(f"{duration} minutes")
+    if rest_seconds:
+        detail_parts.append(f"Rest {rest_seconds}s")
     detail_str = " · ".join(detail_parts)
 
     # Build a context-aware reason using adequacy information
     reason = f"Based on your '{goal_type.replace('_', ' ')}' goal and {experience} experience"
 
     # Add muscle-group context from adequacy
-    pick_mappings = mappings_by_catalog_id.get(pick.id, [])
     pick_primary = [m.muscle_group.replace("_", "/") for m in pick_mappings if m.role == "primary"]
 
-    if done_names:
-        done_str = ", ".join(list(done_names)[:2])
+    if done_today_names:
+        done_str = ", ".join(list(done_today_names)[:2])
         reason += f" (already logged: {done_str})"
 
         # Explain WHY this exercise was chosen
@@ -839,6 +1495,8 @@ def _recommend_exercise_with_adequacy(
 
     if detail_str:
         reason += f". Suggested: {detail_str}."
+    if progression_note:
+        reason += f" {progression_note}."
     if last_perf:
         reason += f" ({last_perf})."
 

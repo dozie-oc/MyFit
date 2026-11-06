@@ -662,6 +662,7 @@ class _ItemCard extends StatelessWidget {
             const SizedBox(height: 6),
             Wrap(
               spacing: 8,
+              runSpacing: 6,
               children: [
                 if (sets != null && reps != null)
                   _Badge(label: '$sets × $reps reps'),
@@ -669,6 +670,8 @@ class _ItemCard extends StatelessWidget {
                   _Badge(label: '@ ${item.weightKg} kg'),
                 if (duration != null)
                   _Badge(label: '$duration min'),
+                if (item.restSeconds != null)
+                  _Badge(label: 'Rest ${item.restSeconds}s'),
               ],
             ),
             if (item.lastPerformance != null &&

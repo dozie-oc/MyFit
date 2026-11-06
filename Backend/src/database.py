@@ -60,11 +60,15 @@ def create_db_and_tables() -> None:
     with engine.connect() as conn:
         from sqlalchemy import text
 
+        # Note on effort_rating migration:
+        # We add `effort_rating` (1-5 scale, NULL when unknown) without converting
+        # legacy `rir` columns, so historical records remain valid with
+        # `effort_rating = None` rather than inventing synthetic effort ratings.
         _safe_alter_table_migrations = [
             "ALTER TABLE meal ADD COLUMN meal_type VARCHAR(20) DEFAULT 'snack'",
             "ALTER TABLE meals ADD COLUMN meal_type VARCHAR(20) DEFAULT 'snack'",
-            "ALTER TABLE exercise ADD COLUMN rir INTEGER",
-            "ALTER TABLE exercises ADD COLUMN rir INTEGER",
+            "ALTER TABLE exercise ADD COLUMN effort_rating INTEGER",
+            "ALTER TABLE exercises ADD COLUMN effort_rating INTEGER",
             "ALTER TABLE exercise ADD COLUMN workout_session_id INTEGER REFERENCES workoutsession(id)",
             "ALTER TABLE exercises ADD COLUMN workout_session_id INTEGER REFERENCES workout_sessions(id)",
         ]

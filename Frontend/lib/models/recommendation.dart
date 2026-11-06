@@ -6,6 +6,7 @@ class RecommendationItem {
   final int? sets;
   final int? reps;
   final double? weightKg;
+  final int? restSeconds;
   final String? lastPerformance;
   final int? durationMinutes;
   final int? foodId;
@@ -25,6 +26,7 @@ class RecommendationItem {
     this.sets,
     this.reps,
     this.weightKg,
+    this.restSeconds,
     this.lastPerformance,
     this.durationMinutes,
     this.foodId,
@@ -46,6 +48,7 @@ class RecommendationItem {
       sets: (json['sets'] as num?)?.toInt(),
       reps: (json['reps'] as num?)?.toInt(),
       weightKg: (json['weight_kg'] as num?)?.toDouble(),
+      restSeconds: (json['rest_seconds'] as num?)?.toInt(),
       lastPerformance: json['last_performance'] as String?,
       durationMinutes: (json['duration_minutes'] as num?)?.toInt(),
       foodId: (json['food_id'] as num?)?.toInt(),

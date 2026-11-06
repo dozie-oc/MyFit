@@ -1,4 +1,20 @@
 class Exercise {
+  static const Map<int, String> effortLabels = {
+    1: 'Very Easy',
+    2: 'Easy',
+    3: 'Moderate',
+    4: 'Hard',
+    5: 'Extremely Hard',
+  };
+
+  static const Map<int, String> effortDescriptions = {
+    1: 'Could have done significantly more. Barely challenging.',
+    2: 'Comfortable set. Little difficulty completing repetitions.',
+    3: 'Noticeably challenging, but still comfortably manageable.',
+    4: 'Required considerable effort. Completing more repetitions would be difficult.',
+    5: 'Near maximum effort or unable to complete another repetition with good form.',
+  };
+
   final int id;
   final String date;
   final String name;
@@ -11,7 +27,7 @@ class Exercise {
   final int? durationMinutes;
   final double? distanceKm;
   final String? intensity;
-  final int? rir;
+  final int? effortRating;
   final double caloriesBurned;
   final bool isPr;
 
@@ -28,10 +44,13 @@ class Exercise {
     this.durationMinutes,
     this.distanceKm,
     this.intensity,
-    this.rir,
+    this.effortRating,
     required this.caloriesBurned,
     this.isPr = false,
   });
+
+  String? get effortLabel =>
+      effortRating != null ? effortLabels[effortRating] : null;
 
   factory Exercise.fromJson(Map<String, dynamic> json) {
     final id = (json['id'] as num?)?.toInt();
@@ -49,7 +68,7 @@ class Exercise {
       durationMinutes: (json['duration_minutes'] as num?)?.toInt(),
       distanceKm: (json['distance_km'] as num?)?.toDouble(),
       intensity: json['intensity'] as String?,
-      rir: (json['rir'] as num?)?.toInt(),
+      effortRating: (json['effort_rating'] as num?)?.toInt(),
       caloriesBurned: (json['calories_burned'] as num?)?.toDouble() ?? 0.0,
       isPr: json['is_pr'] as bool? ?? false,
     );
