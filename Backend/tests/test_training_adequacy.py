@@ -901,3 +901,615 @@ def test_18_workout_session_service_and_router_direct(session, test_user):
     assert len(all_history) == 4
 
 
+# ──────────────────────────────────────────────────────────────
+# TEST 19: Cardio duration present calculates without distance fabrication
+# ──────────────────────────────────────────────────────────────
+
+def test_19_cardio_duration_present_calculates_without_distance_fabrication(
+    client, session, test_user, auth_headers,
+):
+    """When cardio duration is present, effective minutes are derived from
+    duration and intensity. Distance is recorded but does not fabricate
+    additional effective minutes."""
+    _set_goal(client, auth_headers, goal_type="improve_endurance", experience="intermediate")
+
+    _log_exercise(
+        client,
+        auth_headers,
+        "Running",
+        category="cardio",
+        duration_minutes=35,
+        distance_km=5.0,
+        intensity="moderate",
+    )
+
+    data = _get_adequacy(client, auth_headers)
+    assert data["session_action"] == "workout_adequate"
+
+    cardio = data.get("cardio_status")
+    assert cardio is not None
+    assert cardio["total_duration_minutes"] == 35.0
+    # Effective minutes must be exactly 35.0 (35 * 1.0) — distance of 5.0km must NOT add bonus minutes
+    assert cardio["effective_duration_minutes"] == 35.0
+    assert cardio["total_distance_km"] == 5.0
+    assert cardio["has_missing_duration"] is False
+    assert cardio["duration_status"] == "complete"
+    assert cardio["has_meaningful_cardio"] is True
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 20: Cardio duration missing is represented as unknown or incomplete
+# ──────────────────────────────────────────────────────────────
+
+def test_20_cardio_duration_missing_represented_as_unknown_or_incomplete(
+    client, session, test_user, auth_headers,
+):
+    """When cardio exercise has missing duration (None), no default duration
+    is assumed, distance does not fabricate effective minutes, and the status
+    is represented as unknown/incomplete with low confidence."""
+    _set_goal(client, auth_headers, goal_type="improve_endurance", experience="intermediate")
+
+    # Log cardio with distance but NO duration
+    _log_exercise(
+        client,
+        auth_headers,
+        "Running",
+        category="cardio",
+        duration_minutes=None,
+        distance_km=10.0,
+        intensity="moderate",
+    )
+
+    data = _get_adequacy(client, auth_headers)
+    # Must NOT be marked adequate despite logging 10km!
+    assert data["session_action"] == "continue_workout"
+
+    cardio = data.get("cardio_status")
+    assert cardio is not None
+    # No assumed 5 minutes!
+    assert cardio["total_duration_minutes"] == 0.0
+    # Distance does NOT fabricate effective minutes!
+    assert cardio["effective_duration_minutes"] == 0.0
+    # Distance is recorded faithfully
+    assert cardio["total_distance_km"] == 10.0
+    # Represented as unknown / missing duration
+    assert cardio["has_missing_duration"] is True
+    assert cardio["duration_status"] == "unknown"
+    assert cardio["has_meaningful_cardio"] is False
+
+    # Explanation indicates unknown duration
+    assert "unknown" in data["detail"].lower() or "duration" in data["detail"].lower()
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 21: Cardio duration zero does not fabricate effective minutes
+# ──────────────────────────────────────────────────────────────
+
+def test_21_cardio_duration_zero_does_not_fabricate_minutes(
+    client, session, test_user, auth_headers,
+):
+    """When duration is explicitly zero, effective minutes remain zero,
+    distance does not fabricate minutes, and the session is not adequate."""
+    _set_goal(client, auth_headers, goal_type="improve_endurance", experience="intermediate")
+
+    from src.routers.exercises import create_exercise
+    from src.schemas import ExerciseLogCreate
+
+    # Log with duration_minutes=0
+    create_exercise(
+        ExerciseLogCreate(
+            date=date.today(),
+            name="Cycling",
+            category="cardio",
+            duration_minutes=None,
+            distance_km=15.0,
+            intensity="moderate",
+        ),
+        session=session,
+        current_user=test_user,
+    )
+    # Also test evaluate_cardio_session directly with duration_minutes=0
+    from src.services.training_service import evaluate_cardio_session
+
+    zero_exercise = Exercise(
+        user_id=test_user.id,
+        date=date.today(),
+        name="Running",
+        category="cardio",
+        duration_minutes=0,
+        distance_km=8.0,
+        intensity="moderate",
+    )
+    status = evaluate_cardio_session([zero_exercise], experience="intermediate")
+    assert status.total_duration_minutes == 0.0
+    assert status.effective_duration_minutes == 0.0
+    assert status.total_distance_km == 8.0
+    assert status.has_meaningful_cardio is False
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 22: Mixed cardio session represents partial data as incomplete
+# ──────────────────────────────────────────────────────────────
+
+def test_22_mixed_cardio_session_represents_incomplete_duration(
+    session, test_user,
+):
+    """When some cardio exercises have duration and others are missing duration,
+    the session status is represented as 'incomplete' and only known durations count."""
+    from src.services.training_service import evaluate_cardio_session
+
+    ex_with_duration = Exercise(
+        user_id=test_user.id,
+        date=date.today(),
+        name="Running",
+        category="cardio",
+        duration_minutes=25,
+        distance_km=4.0,
+        intensity="moderate",
+    )
+    ex_missing_duration = Exercise(
+        user_id=test_user.id,
+        date=date.today(),
+        name="Walking",
+        category="cardio",
+        duration_minutes=None,
+        distance_km=2.0,
+        intensity="low",
+    )
+
+    status = evaluate_cardio_session(
+        [ex_with_duration, ex_missing_duration],
+        experience="intermediate",
+    )
+    assert status.total_duration_minutes == 25.0
+    assert status.effective_duration_minutes == 25.0
+    assert status.total_distance_km == 6.0
+    assert status.has_missing_duration is True
+    assert status.missing_duration_count == 1
+    assert status.duration_status == "incomplete"
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 23: Small number of exercises or single-muscle work stays incomplete
+# ──────────────────────────────────────────────────────────────
+
+def test_23_small_exercise_count_or_single_primary_muscle_not_adequate(
+    client, session, test_user, auth_headers,
+):
+    """Completing only 2 exercises (even if secondary muscle credits inflate
+    total effective sets) or only targeting 1 primary muscle group must NOT
+    mark the workout adequate."""
+    _set_goal(client, auth_headers, goal_type="build_muscle", experience="intermediate")
+
+    # 2 compound chest exercises (4 raw sets total, 8.0 summed muscle-credit sets)
+    _log_exercise(client, auth_headers, "Bench Press", sets=2, reps=8)
+    _log_exercise(client, auth_headers, "Push-ups", sets=2, reps=12)
+
+    data = _get_adequacy(client, auth_headers)
+    assert data["session_action"] == "continue_workout"
+    assert data["summary"] == "Keep Going"
+
+    # Even with more sets across only 2 exercises targeting 1 primary muscle (chest),
+    # still incomplete because exercise variety (<3) and primary muscle structure (<2) are lacking
+    _log_exercise(client, auth_headers, "Bench Press", sets=3, reps=8)
+    _log_exercise(client, auth_headers, "Push-ups", sets=3, reps=12)
+    data2 = _get_adequacy(client, auth_headers)
+    assert data2["session_action"] == "continue_workout"
+
+    # Once a 3rd distinct exercise targeting a 2nd primary muscle group (back) is added -> adequate!
+    _log_exercise(client, auth_headers, "Barbell Row", sets=4, reps=8)
+    data3 = _get_adequacy(client, auth_headers)
+    assert data3["session_action"] == "workout_adequate"
+    assert data3["summary"] == "Workout Adequate"
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 24: Mixed goal requires meaningful structure (no trivial completion)
+# ──────────────────────────────────────────────────────────────
+
+def test_24_mixed_goal_incomplete_vs_adequate(
+    client, session, test_user, auth_headers,
+):
+    """For mixed goals (improve_fitness), a small amount of strength + short
+    cardio stays incomplete, whereas a meaningful hybrid or structured session
+    is marked workout_adequate."""
+    _set_goal(client, auth_headers, goal_type="improve_fitness", experience="intermediate")
+
+    # Small activity: 1 strength exercise (2 sets) + 10 min cardio (< 20 min minimum)
+    _log_exercise(client, auth_headers, "Push-ups", sets=2, reps=10)
+    _log_exercise(
+        client, auth_headers, "Walking", category="cardio", duration_minutes=10,
+    )
+    adeq_incomplete = _get_adequacy(client, auth_headers)
+    assert adeq_incomplete["session_action"] == "continue_workout"
+
+    # Add a 2nd strength exercise (bringing working sets >= 5 across 2 exercises)
+    # and a meaningful 20-min run -> hybrid mixed session is now adequate!
+    _log_exercise(client, auth_headers, "Barbell Row", sets=3, reps=10)
+    _log_exercise(
+        client, auth_headers, "Running", category="cardio", duration_minutes=20,
+    )
+    adeq_complete = _get_adequacy(client, auth_headers)
+    assert adeq_complete["session_action"] == "workout_adequate"
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 25: Trivial activity on prior days does NOT trigger a rest day
+# ──────────────────────────────────────────────────────────────
+
+def test_25_trivial_prior_days_do_not_trigger_rest_day(
+    session, test_user,
+):
+    """Logging 1 trivial set on prior days of the week must not count as
+    completed training days or trigger rest-day status."""
+    from src.services.training_service import evaluate_training_adequacy
+
+    # Use a fixed Thursday so Monday, Tuesday, Wednesday are in the same week
+    thursday = date(2026, 11, 5)
+    monday = thursday - timedelta(days=3)
+
+    goal = UserGoal(
+        user_id=test_user.id,
+        goal_type="build_muscle",
+        training_experience="intermediate",
+        training_days_per_week=3,
+    )
+    session.add(goal)
+
+    catalog_curl = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Dumbbell Curl")
+    ).first()
+
+    # Log just 1 set of curls on Mon, Tue, Wed
+    for offset in range(3):
+        session.add(
+            Exercise(
+                user_id=test_user.id,
+                date=monday + timedelta(days=offset),
+                name="Dumbbell Curl",
+                category="strength",
+                exercise_catalog_id=catalog_curl.id,
+                sets=1,
+                reps=10,
+                calories_burned=15.0,
+            )
+        )
+    session.commit()
+
+    adequacy = evaluate_training_adequacy(
+        session=session, user_id=test_user.id, goal=goal, today=thursday,
+    )
+    assert adequacy.weekly_progress.trained_days_this_week == 0
+    assert adequacy.weekly_progress.is_rest_day_eligible is False
+    assert adequacy.session_action == "continue_workout"
+    assert adequacy.summary == "Ready to Train"
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 26: Rest-day behavior is distinct from workout completion
+# ──────────────────────────────────────────────────────────────
+
+def test_26_rest_day_distinct_from_workout_completion(
+    session, test_user,
+):
+    """When meaningful workouts on prior days meet training_days_per_week:
+    - With 0 exercises today: session_action is 'rest' (Summary: 'Rest Day'),
+      and recommendations describe a scheduled rest day rather than claiming
+      a workout was completed today.
+    - Once an exercise is logged today: session_action transitions to
+      'continue_workout' (and then 'workout_adequate' when completed),
+      never confusing an active workout with a rest day."""
+    from src.services.recommendation_service import get_recommendation
+    from src.services.training_service import evaluate_training_adequacy
+
+    thursday = date(2026, 11, 5)
+    monday = thursday - timedelta(days=3)
+
+    goal = UserGoal(
+        user_id=test_user.id,
+        goal_type="build_muscle",
+        training_experience="intermediate",
+        training_days_per_week=3,
+    )
+    session.add(goal)
+
+    bench = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Bench Press")
+    ).first()
+    row = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Barbell Row")
+    ).first()
+    ohp = session.exec(
+        select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == "Overhead Press")
+    ).first()
+
+    # Seed 3 meaningful workouts on Monday, Tuesday, Wednesday
+    for offset in range(3):
+        d = monday + timedelta(days=offset)
+        session.add(
+            Exercise(
+                user_id=test_user.id, date=d, name="Bench Press", category="strength",
+                exercise_catalog_id=bench.id, sets=4, reps=8, calories_burned=80.0,
+            )
+        )
+        session.add(
+            Exercise(
+                user_id=test_user.id, date=d, name="Barbell Row", category="strength",
+                exercise_catalog_id=row.id, sets=4, reps=8, calories_burned=80.0,
+            )
+        )
+        session.add(
+            Exercise(
+                user_id=test_user.id, date=d, name="Overhead Press", category="strength",
+                exercise_catalog_id=ohp.id, sets=3, reps=10, calories_burned=60.0,
+            )
+        )
+    session.commit()
+
+    # 1. On Thursday with 0 exercises logged today -> Rest Day
+    adeq_rest = evaluate_training_adequacy(
+        session=session, user_id=test_user.id, goal=goal, today=thursday,
+    )
+    assert adeq_rest.weekly_progress.trained_days_this_week == 3
+    assert adeq_rest.weekly_progress.is_rest_day_eligible is True
+    assert adeq_rest.session_action == "rest"
+    assert adeq_rest.summary == "Rest Day"
+    assert adeq_rest.session_adequacy.is_adequate is False
+
+    # Exercise recommendation on a rest day explicitly says rest day, NOT completed workout
+    rec_rest = get_recommendation(
+        session=session, user=test_user, rec_type="exercise", today=thursday,
+    )
+    assert rec_rest.has_recommendation is False
+    assert "rest day" in rec_rest.reason.lower()
+    assert "completed enough work for this session" not in rec_rest.reason.lower()
+
+    # 2. If the user decides to train on Thursday anyway and logs 1 exercise -> continue_workout (NOT rest)
+    session.add(
+        Exercise(
+            user_id=test_user.id, date=thursday, name="Bench Press", category="strength",
+            exercise_catalog_id=bench.id, sets=4, reps=8, calories_burned=80.0,
+        )
+    )
+    session.commit()
+
+    adeq_started = evaluate_training_adequacy(
+        session=session, user_id=test_user.id, goal=goal, today=thursday,
+    )
+    assert adeq_started.session_action == "continue_workout"
+    assert adeq_started.summary == "Keep Going"
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 27: Two-day full-body routine evaluates weekly adequacy without requiring every muscle group
+# ──────────────────────────────────────────────────────────────
+
+def test_27_two_day_full_body_routine_weekly_adequate(
+    session, test_user,
+):
+    """A valid 2-day full-body routine can achieve weekly 'adequate' status
+    without requiring every tracked muscle group (e.g. calves, forearms, abs,
+    biceps, triceps) to meet a separate weekly target, while keeping weekly
+    progress independent from single-session adequacy."""
+    from src.services.training_service import (
+        calculate_weekly_targets,
+        evaluate_training_adequacy,
+    )
+
+    wednesday = date(2026, 11, 4)
+    monday = wednesday - timedelta(days=2)
+
+    goal = UserGoal(
+        user_id=test_user.id,
+        goal_type="build_muscle",
+        training_experience="intermediate",
+        training_days_per_week=2,
+    )
+    session.add(goal)
+    session.commit()
+
+    # Verify frequency-scaled and tiered targets:
+    # 2-day intermediate build_muscle: major muscle target_min = 6.0 (10 * 0.6), accessory = 3.0
+    targets = calculate_weekly_targets(goal)
+    assert targets["chest"][0] == 6.0
+    assert targets["back"][0] == 6.0
+    assert targets["quadriceps"][0] == 6.0
+    assert targets["calves"][0] == 3.0
+    assert targets["forearms"][0] == 3.0
+
+    def _catalog(name: str) -> ExerciseCatalogItem:
+        return session.exec(
+            select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == name)
+        ).first()
+
+    squat = _catalog("Barbell Squat")
+    bench = _catalog("Bench Press")
+    row = _catalog("Barbell Row")
+    deadlift = _catalog("Deadlift")
+    ohp = _catalog("Overhead Press")
+    pullups = _catalog("Pull-ups")
+
+    # Day 1 (Monday): Full Body A — Squat (4 sets), Bench Press (4 sets), Barbell Row (4 sets)
+    for item in (squat, bench, row):
+        session.add(
+            Exercise(
+                user_id=test_user.id,
+                date=monday,
+                name=item.name,
+                category="strength",
+                exercise_catalog_id=item.id,
+                sets=4,
+                reps=8,
+                calories_burned=90.0,
+            )
+        )
+    session.commit()
+
+    # Evaluate on Monday: Monday's individual session is adequate,
+    # BUT weekly progress is still insufficient (only 1 of 2 planned days done).
+    adeq_day1 = evaluate_training_adequacy(
+        session=session, user_id=test_user.id, goal=goal, today=monday,
+    )
+    assert adeq_day1.session_adequacy.is_adequate is True
+    assert adeq_day1.session_action == "workout_adequate"
+    assert adeq_day1.weekly_progress.trained_days_this_week == 1
+    assert adeq_day1.weekly_progress.overall_status == "insufficient"
+
+    # Day 2 (Wednesday): Full Body B — Deadlift (4 sets), Overhead Press (4 sets), Pull-ups (4 sets)
+    for item in (deadlift, ohp, pullups):
+        session.add(
+            Exercise(
+                user_id=test_user.id,
+                date=wednesday,
+                name=item.name,
+                category="strength",
+                exercise_catalog_id=item.id,
+                sets=4,
+                reps=8,
+                calories_burned=90.0,
+            )
+        )
+    session.commit()
+
+    # Evaluate on Wednesday: both session and weekly progress are now adequate!
+    adeq_day2 = evaluate_training_adequacy(
+        session=session, user_id=test_user.id, goal=goal, today=wednesday,
+    )
+    assert adeq_day2.session_adequacy.is_adequate is True
+    assert adeq_day2.session_action == "workout_adequate"
+    assert adeq_day2.weekly_progress.trained_days_this_week == 2
+    assert adeq_day2.weekly_progress.detected_routine == "full_body"
+    assert adeq_day2.weekly_progress.core_regions_covered == 3
+    assert adeq_day2.weekly_progress.overall_status == "adequate"
+
+    # Confirm that isolated accessories (calves, abs_core, forearms) were NOT required
+    muscle_map = adeq_day2.weekly_progress.muscle_volumes
+    assert muscle_map["calves"].effective_sets == 0.0
+    assert muscle_map["abs_core"].effective_sets == 0.0
+    assert muscle_map["forearms"].status == "undertrained"
+
+
+# ──────────────────────────────────────────────────────────────
+# TEST 28: Different training frequencies and routines keep weekly progress meaningful
+# ──────────────────────────────────────────────────────────────
+
+def test_28_different_frequencies_and_split_routines_weekly_evaluation(
+    session, test_user,
+):
+    """Weekly evaluation accounts for routine structure and training frequency:
+    - A lopsided 2-day routine (only training chest + biceps, neglecting pull/legs)
+      remains 'insufficient' even when 2 days are logged.
+    - A 4-day Upper/Lower split routine is detected as 'upper_lower' and evaluates
+      as 'adequate' when upper and lower days are completed, without requiring
+      every accessory muscle to hit a separate target."""
+    from src.services.training_service import evaluate_training_adequacy
+
+    friday = date(2026, 11, 6)
+    monday = friday - timedelta(days=4)
+
+    def _catalog(name: str) -> ExerciseCatalogItem:
+        return session.exec(
+            select(ExerciseCatalogItem).where(ExerciseCatalogItem.name == name)
+        ).first()
+
+    bench = _catalog("Bench Press")
+    pushups = _catalog("Push-ups")
+    curl = _catalog("Dumbbell Curl")
+    ohp = _catalog("Overhead Press")
+    row = _catalog("Barbell Row")
+    pullups = _catalog("Pull-ups")
+    squat = _catalog("Barbell Squat")
+    deadlift = _catalog("Deadlift")
+    leg_press = _catalog("Leg Press")
+
+    # Case A: 2-day plan where user only trains chest + biceps on both days (lopsided)
+    goal_2day = UserGoal(
+        user_id=test_user.id,
+        goal_type="build_muscle",
+        training_experience="intermediate",
+        training_days_per_week=2,
+    )
+    session.add(goal_2day)
+    session.commit()
+
+    for offset in (0, 2):  # Monday and Wednesday
+        d = monday + timedelta(days=offset)
+        for item in (bench, pushups, curl):
+            session.add(
+                Exercise(
+                    user_id=test_user.id,
+                    date=d,
+                    name=item.name,
+                    category="strength",
+                    exercise_catalog_id=item.id,
+                    sets=4,
+                    reps=10,
+                    calories_burned=60.0,
+                )
+            )
+    session.commit()
+
+    adeq_lopsided = evaluate_training_adequacy(
+        session=session, user_id=test_user.id, goal=goal_2day, today=monday + timedelta(days=2),
+    )
+    # Individual session on Wednesday had 3 exercises, 12 working sets, 2 primary muscles (chest, biceps) -> session adequate
+    assert adeq_lopsided.session_adequacy.is_adequate is True
+    # But weekly progress is INSUFFICIENT because back (upper_pull) and legs (lower_body) were completely skipped!
+    assert adeq_lopsided.weekly_progress.trained_days_this_week == 2
+    assert adeq_lopsided.weekly_progress.core_regions_covered == 1
+    assert adeq_lopsided.weekly_progress.overall_status == "insufficient"
+
+    # Case B: Clear exercises and test a 4-day Upper/Lower routine (Mon Upper, Tue Lower, Thu Upper, Fri Lower)
+    for ex in session.exec(select(Exercise).where(Exercise.user_id == test_user.id)).all():
+        session.delete(ex)
+    goal_2day.training_days_per_week = 4
+    session.add(goal_2day)
+    session.commit()
+
+    # Monday & Thursday: Upper Body (Bench Press, Barbell Row, Overhead Press, Pull-ups)
+    for offset in (0, 3):
+        d = monday + timedelta(days=offset)
+        for item in (bench, row, ohp, pullups):
+            session.add(
+                Exercise(
+                    user_id=test_user.id,
+                    date=d,
+                    name=item.name,
+                    category="strength",
+                    exercise_catalog_id=item.id,
+                    sets=4,
+                    reps=8,
+                    calories_burned=80.0,
+                )
+            )
+
+    # Tuesday & Friday: Lower Body (Barbell Squat, Deadlift, Leg Press)
+    for offset in (1, 4):
+        d = monday + timedelta(days=offset)
+        for item in (squat, deadlift, leg_press):
+            session.add(
+                Exercise(
+                    user_id=test_user.id,
+                    date=d,
+                    name=item.name,
+                    category="strength",
+                    exercise_catalog_id=item.id,
+                    sets=4,
+                    reps=8,
+                    calories_burned=95.0,
+                )
+            )
+    session.commit()
+
+    adeq_upper_lower = evaluate_training_adequacy(
+        session=session, user_id=test_user.id, goal=goal_2day, today=friday,
+    )
+    assert adeq_upper_lower.weekly_progress.trained_days_this_week == 4
+    assert adeq_upper_lower.weekly_progress.detected_routine == "upper_lower"
+    assert adeq_upper_lower.weekly_progress.core_regions_covered == 3
+    assert adeq_upper_lower.weekly_progress.overall_status == "adequate"
+
+
+
+
+

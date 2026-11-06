@@ -5,6 +5,7 @@ import '../services/api_client.dart';
 import '../auth_state.dart';
 import '../theme.dart';
 import 'goal_screen.dart';
+import '../widgets/server_settings_dialog.dart';
 import '../main.dart' show TabActivatedNotifier;
 
 // ─────────────────────────────────────────
@@ -85,6 +86,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
       appBar: AppBar(
         title: const Text('Profile'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.dns_outlined),
+            tooltip: 'Server Settings',
+            onPressed: () => showServerSettingsDialog(context),
+          ),
           TextButton(
             onPressed: () async {
               final confirm = await showDialog<bool>(

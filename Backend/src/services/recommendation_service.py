@@ -428,8 +428,10 @@ def get_recommendation(
         today=today,
     )
 
-    # Derive exercise completion from training adequacy
-    exercise_done = adequacy.session_action in ("workout_adequate", "rest")
+    # Derive exercise completion vs rest-day state from training adequacy
+    workout_completed = adequacy.session_action == "workout_adequate"
+    is_rest_day = adequacy.session_action == "rest"
+    exercise_done = workout_completed or is_rest_day
 
     # Nutrition completion: within 90% calories and 85% protein, or < 150 kcal remaining
     cal_done = total_cal >= cal_target * 0.90 or cal_remaining < 150
@@ -439,7 +441,7 @@ def get_recommendation(
     # ── Explicit type request handling ─────────────────────────
     if rec_type == "exercise":
         if exercise_done:
-            if adequacy.session_action == "rest":
+            if is_rest_day:
                 reason = (
                     "Today is a scheduled rest day based on your weekly training target. "
                     "Rest up and recover!"
@@ -479,8 +481,17 @@ def get_recommendation(
     # ── General recommendation (rec_type is None) ───────────────
     sessions_today = len(today_exercises)
 
-    # Case 1: Both nutrition and exercise are complete
+    # Case 1: Both nutrition and exercise/rest are satisfied
     if nutrition_done and exercise_done:
+        if is_rest_day:
+            return RecommendationResponse(
+                has_recommendation=False,
+                type="none",
+                reason=(
+                    "Today is a scheduled rest day and you've hit your nutrition targets. "
+                    "Rest up and recover!"
+                ),
+            )
         return RecommendationResponse(
             has_recommendation=False,
             type="none",

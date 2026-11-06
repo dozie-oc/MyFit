@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../auth_state.dart';
+import '../widgets/server_settings_dialog.dart';
 
 // ─────────────────────────────────────────
 // LOGIN SCREEN
@@ -26,23 +27,39 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
+  void _showErrorSnackBar(String err) {
+    if (!mounted) return;
+    final isConnErr = err.toLowerCase().contains('connection') ||
+        err.toLowerCase().contains('socket') ||
+        err.toLowerCase().contains('failed');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(err),
+        backgroundColor: Colors.red.shade700,
+        action: isConnErr
+            ? SnackBarAction(
+                label: 'Settings',
+                textColor: Colors.white,
+                onPressed: () => showServerSettingsDialog(context),
+              )
+            : null,
+      ),
+    );
+  }
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     final ok = await widget.authState
         .login(_userCtrl.text.trim(), _passCtrl.text);
     if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(widget.authState.error ?? 'Login failed'),
-          backgroundColor: Colors.red.shade700));
+      _showErrorSnackBar(widget.authState.error ?? 'Login failed');
     }
   }
 
   Future<void> _adminLogin() async {
     final ok = await widget.authState.adminLogin();
     if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(widget.authState.error ?? 'Admin login failed'),
-          backgroundColor: Colors.red.shade700));
+      _showErrorSnackBar(widget.authState.error ?? 'Admin login failed');
     }
   }
 
@@ -67,11 +84,22 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('MyFit',
-                      style: TextStyle(
-                          fontSize: 32,
-                          fontWeight: FontWeight.w700,
-                          color: Theme.of(context).colorScheme.primary)),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Text('MyFit',
+                          style: TextStyle(
+                              fontSize: 32,
+                              fontWeight: FontWeight.w700,
+                              color: Theme.of(context).colorScheme.primary)),
+                      IconButton(
+                        icon: const Icon(Icons.dns_outlined),
+                        tooltip: 'Server Settings',
+                        onPressed: () => showServerSettingsDialog(context),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 6),
                   const Text('Track food, exercise & habits.',
                       style: TextStyle(color: Color(0xFF6B7280), fontSize: 15)),
@@ -186,9 +214,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
       password: _passCtrl.text,
     );
     if (!ok && mounted) {
+      final err = widget.authState.error ?? 'Registration failed';
+      final isConnErr = err.toLowerCase().contains('connection') ||
+          err.toLowerCase().contains('socket') ||
+          err.toLowerCase().contains('failed');
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(widget.authState.error ?? 'Registration failed'),
-          backgroundColor: Colors.red.shade700));
+        content: Text(err),
+        backgroundColor: Colors.red.shade700,
+        action: isConnErr
+            ? SnackBarAction(
+                label: 'Settings',
+                textColor: Colors.white,
+                onPressed: () => showServerSettingsDialog(context),
+              )
+            : null,
+      ));
     } else if (ok && mounted) {
       // Return back to root where authState listenable will display onboarding GoalScreen
       Navigator.of(context).popUntil((route) => route.isFirst);
@@ -200,6 +240,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Create Account'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.dns_outlined),
+            tooltip: 'Server Settings',
+            onPressed: () => showServerSettingsDialog(context),
+          ),
+        ],
       ),
       body: SafeArea(
         child: Center(

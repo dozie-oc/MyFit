@@ -10,9 +10,12 @@ import 'screens/exercises_screen.dart';
 import 'screens/habits_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/goal_screen.dart';
+import 'services/api_client.dart';
+import 'widgets/server_settings_dialog.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await ApiClient.initBaseUrl();
   final authState = AuthState();
   await authState.restore();
   runApp(MyFitApp(authState: authState));
@@ -40,6 +43,11 @@ class MyFitApp extends StatelessWidget {
             appBar: AppBar(
               title: const Text('MyFit'),
               actions: [
+                IconButton(
+                  tooltip: 'Server Settings',
+                  icon: const Icon(Icons.dns_outlined),
+                  onPressed: () => showServerSettingsDialog(context),
+                ),
                 IconButton(
                   tooltip: 'Log Out',
                   icon: const Icon(Icons.logout),

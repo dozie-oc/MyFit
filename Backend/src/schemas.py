@@ -855,6 +855,18 @@ class CardioWeekOut(BaseModel):
     status: str = "low"
 
 
+class CardioStatusOut(BaseModel):
+    total_duration_minutes: float = 0.0
+    effective_duration_minutes: float = 0.0
+    target_minutes: float = 30.0
+    min_minutes: float = 15.0
+    has_meaningful_cardio: bool = False
+    completion_ratio: float = 0.0
+    duration_status: str = "none"  # "complete" | "incomplete" | "unknown" | "none"
+    has_missing_duration: bool = False
+    total_distance_km: float = 0.0
+
+
 class TrainingAdequacyResponse(BaseModel):
     """
     Structured training adequacy evaluation.
@@ -888,6 +900,7 @@ class TrainingAdequacyResponse(BaseModel):
     total_sets_today: float = 0
 
     cardio_week: CardioWeekOut = Field(default_factory=CardioWeekOut)
+    cardio_status: CardioStatusOut | None = None
 
 
 # ============================================================

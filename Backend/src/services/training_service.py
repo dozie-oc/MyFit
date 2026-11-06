@@ -42,8 +42,9 @@ IMPORTANT HEURISTIC NOTES:
   When RIR is unknown (None), the set receives full credit rather
   than being penalised — we assume the user trained with reasonable
   effort unless they tell us otherwise.
-- Cardio adequacy is evaluated using duration, distance, and
-  intensity — NOT strength-training set counts.
+- Cardio adequacy is evaluated using duration and intensity — NOT
+  strength-training set counts. Distance may be recorded, but it does
+  not substitute for duration or fabricate effective minutes.
 """
 
 from datetime import date as Date, datetime, timedelta, timezone
@@ -193,6 +194,33 @@ MAX_SETS_PER_SESSION: dict[str, int] = {
 UPPER_MUSCLE_GROUPS = {"chest", "back", "shoulders", "biceps", "triceps"}
 LOWER_MUSCLE_GROUPS = {"quadriceps", "hamstrings", "glutes", "calves"}
 
+# Major compound muscle groups vs accessory/minor muscle groups
+MAJOR_MUSCLE_GROUPS = {
+    "chest", "back", "shoulders",
+    "quadriceps", "hamstrings", "glutes",
+}
+ACCESSORY_MUSCLE_GROUPS = {
+    "biceps", "triceps", "forearms", "calves", "abs_core",
+}
+
+# Core functional movement regions for evaluating full-body / routine balance
+CORE_REGIONS: dict[str, set[str]] = {
+    "upper_push": {"chest", "shoulders"},
+    "upper_pull": {"back"},
+    "lower_body": {"quadriceps", "hamstrings", "glutes"},
+}
+
+# Weekly set target scaling by planned training frequency (days per week)
+FREQUENCY_MULTIPLIERS: dict[int, float] = {
+    1: 0.45,
+    2: 0.60,
+    3: 0.80,
+    4: 1.00,
+    5: 1.10,
+    6: 1.15,
+    7: 1.15,
+}
+
 
 # ──────────────────────────────────────────────────────────────────────
 # DATA CLASSES for structured results
@@ -226,6 +254,11 @@ class CardioStatus:
     has_meaningful_cardio: bool = False
     # Percentage of target achieved (0.0 to 1.0+)
     completion_ratio: float = 0.0
+    # Missing duration representation: "unknown" if missing, "incomplete" if partial, "complete" if present
+    duration_status: str = "none"
+    has_missing_duration: bool = False
+    missing_duration_count: int = 0
+    total_distance_km: float = 0.0
 
 
 @dataclass
@@ -260,6 +293,8 @@ class WeeklyProgress:
     trained_days_this_week: int = 0
     training_days_target: int = 3
     is_rest_day_eligible: bool = False
+    detected_routine: str = "unstarted"  # full_body | upper_lower | split | cardio_focused | unstarted
+    core_regions_covered: int = 0
 
 
 @dataclass
@@ -349,23 +384,31 @@ def calculate_weekly_targets(
     goal: UserGoal | None,
 ) -> dict[str, tuple[float, float]]:
     """
-    Calculate weekly set targets per muscle group based on user goal
-    and experience level.
+    Calculate weekly set targets per muscle group based on user goal,
+    experience level, training frequency, and muscle group tier
+    (major compound vs accessory).
 
     Returns {muscle_group: (target_min, target_max)}.
     """
     goal_type = (goal.goal_type or "improve_fitness").lower() if goal else "improve_fitness"
     experience = (goal.training_experience or "beginner").lower() if goal else "beginner"
+    training_days = (
+        goal.training_days_per_week
+        if (goal and goal.training_days_per_week is not None)
+        else 4
+    )
+    clamped_days = min(max(int(training_days), 1), 7)
 
     base_min, base_max = GOAL_BASE_TARGETS.get(goal_type, (6.0, 14.0))
     exp_mult = EXPERIENCE_MULTIPLIERS.get(experience, 1.0)
+    freq_mult = FREQUENCY_MULTIPLIERS.get(clamped_days, 1.0)
 
     targets = {}
     for mg in ALL_MUSCLE_GROUPS:
-        targets[mg] = (
-            round(base_min * exp_mult, 1),
-            round(base_max * exp_mult, 1),
-        )
+        tier_mult = 1.0 if mg in MAJOR_MUSCLE_GROUPS else 0.5
+        t_min = max(2.0, round(base_min * exp_mult * freq_mult * tier_mult, 1))
+        t_max = max(t_min + 2.0, round(base_max * exp_mult * freq_mult * tier_mult, 1))
+        targets[mg] = (t_min, t_max)
 
     return targets
 
@@ -395,8 +438,12 @@ def detect_session_split(
     Detect what kind of split the current session appears to follow.
 
     Returns "upper", "lower", "full", or None.
+    Uses primary muscle groups so secondary stabilizer involvement
+    (e.g. back on deadlifts) does not misclassify a lower-body day
+    as full-body.
     """
-    muscles_hit: set[str] = set()
+    primary_muscles: set[str] = set()
+    all_muscles: set[str] = set()
 
     for ex in exercises:
         catalog_id = ex.exercise_catalog_id
@@ -404,8 +451,11 @@ def detect_session_split(
             continue
         mappings = mappings_by_catalog_id.get(catalog_id, [])
         for m in mappings:
-            muscles_hit.add(m.muscle_group)
+            all_muscles.add(m.muscle_group)
+            if (m.role or "primary").lower() == "primary":
+                primary_muscles.add(m.muscle_group)
 
+    muscles_hit = primary_muscles if primary_muscles else all_muscles
     if not muscles_hit:
         return None
 
@@ -430,10 +480,12 @@ def evaluate_cardio_session(
     experience: str,
 ) -> CardioStatus:
     """
-    Evaluate cardio adequacy for a set of exercises using duration,
-    distance, and intensity — NOT strength-training set counts.
+    Evaluate cardio adequacy for a set of exercises using duration
+    and intensity — NOT strength-training set counts.
 
     Only considers exercises categorised as "cardio".
+    Distance may be recorded, but does not substitute for duration
+    or fabricate effective minutes.
     """
     target = CARDIO_TARGET_DURATION.get(experience, 30)
     minimum = CARDIO_MIN_DURATION.get(experience, 15)
@@ -450,32 +502,44 @@ def evaluate_cardio_session(
 
     total_raw = 0.0
     total_effective = 0.0
+    total_distance = 0.0
+    missing_count = 0
+    zero_count = 0
+    positive_count = 0
 
     for ex in cardio_exercises:
-        duration = ex.duration_minutes or 0
-        if duration <= 0:
-            # Cardio with no duration — we cannot evaluate, but don't
-            # ignore it entirely. Give minimal credit.
-            duration = 5  # assume at least 5 minutes if they logged it
+        if ex.distance_km is not None and ex.distance_km > 0:
+            total_distance += ex.distance_km
 
+        if ex.duration_minutes is None:
+            missing_count += 1
+            # Missing duration: do not assume a fallback duration,
+            # and do not use distance as a substitute for duration.
+            continue
+
+        raw = float(ex.duration_minutes)
+        if raw <= 0:
+            zero_count += 1
+            # Zero duration: no effective minutes contributed.
+            continue
+
+        positive_count += 1
         intensity = (ex.intensity or "moderate").lower()
         multiplier = CARDIO_INTENSITY_MULTIPLIERS.get(intensity, 1.0)
-
-        # Distance bonus: if they logged distance, give a small boost
-        # for longer-distance sessions.
-        distance_bonus = 0.0
-        if ex.distance_km and ex.distance_km > 0:
-            # e.g. 5km adds ~5 effective minutes worth of credit
-            distance_bonus = min(ex.distance_km * 1.0, 10.0)
-
-        raw = float(duration)
-        effective = raw * multiplier + distance_bonus
+        effective = raw * multiplier
 
         total_raw += raw
         total_effective += effective
 
     status.total_duration_minutes = round(total_raw, 1)
     status.effective_duration_minutes = round(total_effective, 1)
+    status.total_distance_km = round(total_distance, 1)
+    status.has_missing_duration = (missing_count > 0)
+    status.missing_duration_count = missing_count
+    status.duration_status = (
+        "unknown" if (missing_count > 0 and positive_count == 0)
+        else ("incomplete" if missing_count > 0 else "complete")
+    )
     status.has_meaningful_cardio = total_effective >= minimum
     status.completion_ratio = round(total_effective / max(target, 1.0), 2)
 
@@ -531,7 +595,11 @@ def evaluate_session_adequacy(
     # Calculate strength metrics for this session
     session_volume = aggregate_volume(strength_exercises, mappings_by_catalog_id)
     total_effective_sets = sum(session_volume.values())
+    working_sets = _calculate_working_sets(strength_exercises)
     muscle_groups_hit = len([mg for mg, v in session_volume.items() if v > 0])
+    primary_muscles_hit = len(
+        _primary_muscle_groups_hit(strength_exercises, mappings_by_catalog_id)
+    )
 
     # Count exercises with missing mappings
     unmapped_strength = sum(
@@ -558,8 +626,10 @@ def evaluate_session_adequacy(
         # Strength-focused evaluation
         is_adequate, confidence, reason_parts = _evaluate_strength_session(
             total_effective_sets=total_effective_sets,
+            working_sets=working_sets,
             total_raw_sets=total_raw_sets,
             muscle_groups_hit=muscle_groups_hit,
+            primary_muscles_hit=primary_muscles_hit,
             unmapped_strength=unmapped_strength,
             max_session_sets=max_session_sets,
             experience=experience,
@@ -587,8 +657,10 @@ def evaluate_session_adequacy(
         # Mixed goals (improve_fitness, lose_weight, maintain_weight)
         is_adequate, confidence, reason_parts = _evaluate_mixed_session(
             total_effective_sets=total_effective_sets,
+            working_sets=working_sets,
             total_raw_sets=total_raw_sets,
             muscle_groups_hit=muscle_groups_hit,
+            primary_muscles_hit=primary_muscles_hit,
             unmapped_strength=unmapped_strength,
             max_session_sets=max_session_sets,
             experience=experience,
@@ -599,12 +671,13 @@ def evaluate_session_adequacy(
         )
 
     # If exercises exist with no sets and no duration, lower confidence
-    if other_exercises and not has_strength and not has_cardio:
+    if (other_exercises or cardio_status.has_missing_duration) and not has_strength and not has_cardio:
         confidence = "low"
-        reason_parts.append(
-            f"{len(other_exercises)} exercise(s) logged without clear sets or duration — "
-            "unable to fully evaluate the session."
-        )
+        if other_exercises:
+            reason_parts.append(
+                f"{len(other_exercises)} exercise(s) logged without clear sets or duration — "
+                "unable to fully evaluate the session."
+            )
 
     return SessionAdequacy(
         is_adequate=is_adequate,
@@ -618,7 +691,8 @@ def evaluate_session_adequacy(
     )
 
 
-MIN_DISTINCT_STRENGTH_EXERCISES = 2
+MIN_DISTINCT_STRENGTH_EXERCISES = 3
+MIN_PRIMARY_MUSCLE_GROUPS = 2
 
 
 def _distinct_exercise_count(exercises: list[Exercise]) -> int:
@@ -630,10 +704,40 @@ def _distinct_exercise_count(exercises: list[Exercise]) -> int:
     return len(keys)
 
 
+def _calculate_working_sets(exercises: list[Exercise]) -> float:
+    """
+    Calculate effort-adjusted working sets across strength exercises.
+    Unlike `aggregate_volume` (which sums primary + secondary muscle credits),
+    each logged set counts as 1 working set weighted by RIR effort.
+    """
+    total = 0.0
+    for ex in exercises:
+        if ex.sets is not None and ex.sets > 0:
+            total += ex.sets * _rir_effort(ex.rir)
+    return round(total, 1)
+
+
+def _primary_muscle_groups_hit(
+    exercises: list[Exercise],
+    mappings_by_catalog_id: dict[int, list[ExerciseMuscleMapping]],
+) -> set[str]:
+    """Return the set of primary muscle groups targeted by the given strength exercises."""
+    primaries: set[str] = set()
+    for ex in exercises:
+        if ex.sets is None or ex.sets <= 0 or ex.exercise_catalog_id is None:
+            continue
+        for m in mappings_by_catalog_id.get(ex.exercise_catalog_id, []):
+            if m.role == "primary":
+                primaries.add(m.muscle_group)
+    return primaries
+
+
 def _evaluate_strength_session(
     total_effective_sets: float,
+    working_sets: float,
     total_raw_sets: float,
     muscle_groups_hit: int,
+    primary_muscles_hit: int,
     unmapped_strength: int,
     max_session_sets: int,
     experience: str,
@@ -644,67 +748,80 @@ def _evaluate_strength_session(
     confidence = "medium"
     distinct_exercises = _distinct_exercise_count(strength_exercises)
     enough_variety = distinct_exercises >= MIN_DISTINCT_STRENGTH_EXERCISES
+    enough_structure = primary_muscles_hit >= MIN_PRIMARY_MUSCLE_GROUPS
 
     # Minimum thresholds for a session (NOT weekly targets)
-    # These are deliberately lower than weekly targets — a single session
-    # doesn't need to satisfy the entire week.
     if experience == "beginner":
-        min_effective_sets = 6.0
-        min_muscle_groups = 2
-    elif experience == "intermediate":
+        min_working_sets = 6.0
         min_effective_sets = 8.0
-        min_muscle_groups = 2
+    elif experience == "intermediate":
+        min_working_sets = 8.0
+        min_effective_sets = 12.0
     else:
-        min_effective_sets = 10.0
-        min_muscle_groups = 2
+        min_working_sets = 10.0
+        min_effective_sets = 15.0
 
-    # Hit the safety cap? Definitely adequate.
-    if total_effective_sets >= max_session_sets:
+    # Hit the safety cap? Require at least 2 distinct exercises and 2 primary muscle groups
+    # so a single exercise with high secondary-muscle multipliers never completes a workout.
+    if (
+        working_sets >= max_session_sets
+        and distinct_exercises >= 2
+        and enough_structure
+    ):
         return True, "high", [
-            f"{total_effective_sets:.0f} effective sets across {muscle_groups_hit} muscle groups — "
-            "you've done substantial work this session."
+            f"{working_sets:.0f} working sets ({total_effective_sets:.0f} effective muscle sets) across "
+            f"{muscle_groups_hit} muscle groups — you've done substantial work this session."
         ]
 
-    # Enough effective sets AND enough muscle group spread?
+    # Enough working sets, effective volume, distinct exercises, AND primary muscle structure?
     if (
-        total_effective_sets >= min_effective_sets
-        and muscle_groups_hit >= min_muscle_groups
+        working_sets >= min_working_sets
+        and total_effective_sets >= min_effective_sets
         and enough_variety
+        and enough_structure
     ):
         confidence = "high" if unmapped_strength == 0 else "medium"
         reason_parts.append(
-            f"{total_effective_sets:.0f} effective sets across {muscle_groups_hit} muscle groups — "
+            f"{working_sets:.0f} working sets ({total_effective_sets:.0f} effective sets) across "
+            f"{distinct_exercises} exercises and {primary_muscles_hit} primary muscle groups — "
             "session is looking solid."
         )
         return True, confidence, reason_parts
 
     # Handle the case where exercises have no muscle mappings
-    # but the raw set count is reasonable
-    if unmapped_strength > 0 and total_raw_sets >= min_effective_sets:
+    # but the raw set count and exercise variety are substantial
+    if unmapped_strength > 0 and total_raw_sets >= min_working_sets:
         confidence = "low"
         reason_parts.append(
             f"{total_raw_sets} raw sets logged, but {unmapped_strength} exercise(s) "
             "have no muscle-group data — session may be adequate but cannot be confirmed."
         )
-        # Be lenient: if raw sets are well above threshold, accept it
-        if total_raw_sets >= min_effective_sets * 1.5 and enough_variety:
+        if total_raw_sets >= min_working_sets * 1.5 and enough_variety:
             return True, confidence, reason_parts
         return False, confidence, reason_parts
 
-    # Volume is there but it all came from a single exercise —
-    # secondary-muscle credit alone shouldn't complete a session.
-    if total_effective_sets >= min_effective_sets and not enough_variety:
+    # Volume is there, but from too few exercises
+    if working_sets >= min_working_sets and not enough_variety:
         reason_parts.append(
-            f"{total_effective_sets:.0f} effective sets so far, but from only one exercise — "
-            f"add at least one more exercise to round out the session."
+            f"{working_sets:.0f} working sets logged across only {distinct_exercises} exercise(s) — "
+            f"complete at least {MIN_DISTINCT_STRENGTH_EXERCISES} exercises for a well-rounded session."
+        )
+        return False, confidence, reason_parts
+
+    # Volume and exercise count are there, but all targeting a single primary muscle group
+    if working_sets >= min_working_sets and enough_variety and not enough_structure:
+        reason_parts.append(
+            f"{working_sets:.0f} working sets across {distinct_exercises} exercises, but targeting only "
+            f"{primary_muscles_hit} primary muscle group — add work for another muscle group to balance the session."
         )
         return False, confidence, reason_parts
 
     # Not enough work yet
-    if total_effective_sets > 0:
+    if working_sets > 0:
         reason_parts.append(
-            f"{total_effective_sets:.0f} effective sets across {muscle_groups_hit} muscle group(s) so far — "
-            f"aim for at least {min_effective_sets:.0f} sets."
+            f"{working_sets:.0f} working sets ({distinct_exercises}/{MIN_DISTINCT_STRENGTH_EXERCISES} exercises, "
+            f"{primary_muscles_hit}/{MIN_PRIMARY_MUSCLE_GROUPS} primary muscle groups) so far — "
+            f"aim for at least {min_working_sets:.0f} working sets across {MIN_DISTINCT_STRENGTH_EXERCISES}+ exercises."
         )
     else:
         if strength_exercises:
@@ -726,6 +843,19 @@ def _evaluate_cardio_session_adequacy(
     reason_parts: list[str] = []
 
     if not cardio_status.has_meaningful_cardio:
+        if cardio_status.has_missing_duration:
+            dist_str = f" ({cardio_status.total_distance_km:.1f}km)" if cardio_status.total_distance_km > 0 else ""
+            if cardio_status.total_duration_minutes > 0:
+                reason_parts.append(
+                    f"{cardio_status.total_duration_minutes:.0f}min of cardio logged, but "
+                    f"{cardio_status.missing_duration_count} exercise(s) had missing duration (incomplete data)."
+                )
+            else:
+                reason_parts.append(
+                    f"Cardio logged{dist_str} without duration — duration is unknown or incomplete, unable to evaluate adequacy."
+                )
+            return False, "low", reason_parts
+
         if cardio_status.total_duration_minutes > 0:
             reason_parts.append(
                 f"{cardio_status.total_duration_minutes:.0f}min of cardio logged, "
@@ -758,8 +888,10 @@ def _evaluate_cardio_session_adequacy(
 
 def _evaluate_mixed_session(
     total_effective_sets: float,
+    working_sets: float,
     total_raw_sets: float,
     muscle_groups_hit: int,
+    primary_muscles_hit: int,
     unmapped_strength: int,
     max_session_sets: int,
     experience: str,
@@ -771,47 +903,61 @@ def _evaluate_mixed_session(
     """
     Evaluate a session for mixed goals (fitness, weight loss, maintenance).
 
-    Either strength OR cardio work can contribute to adequacy.
-    Both together is even better.
+    Either structured strength work, a full cardio session, or a meaningful
+    hybrid combination can satisfy adequacy.
     """
     reason_parts: list[str] = []
 
-    # Lower thresholds for mixed goals — the user doesn't need
-    # a full powerlifting session or a full cardio session.
     if experience == "beginner":
-        min_sets = 4.0
-        min_cardio_ratio = 0.6
+        min_working_sets = 6.0
+        min_effective_sets = 8.0
+        min_cardio_ratio = 0.70
+        min_hybrid_working_sets = 4.0
     elif experience == "intermediate":
-        min_sets = 6.0
-        min_cardio_ratio = 0.65
+        min_working_sets = 7.0
+        min_effective_sets = 10.0
+        min_cardio_ratio = 0.75
+        min_hybrid_working_sets = 5.0
     else:
-        min_sets = 8.0
-        min_cardio_ratio = 0.7
+        min_working_sets = 8.0
+        min_effective_sets = 12.0
+        min_cardio_ratio = 0.80
+        min_hybrid_working_sets = 6.0
 
-    enough_variety = _distinct_exercise_count(strength_exercises) >= MIN_DISTINCT_STRENGTH_EXERCISES
+    distinct_exercises = _distinct_exercise_count(strength_exercises)
+    enough_variety = distinct_exercises >= MIN_DISTINCT_STRENGTH_EXERCISES
+    enough_structure = primary_muscles_hit >= MIN_PRIMARY_MUSCLE_GROUPS
+
     strength_adequate = (
-        total_effective_sets >= min_sets and muscle_groups_hit >= 2 and enough_variety
+        working_sets >= min_working_sets
+        and total_effective_sets >= min_effective_sets
+        and enough_variety
+        and enough_structure
     )
-    cardio_adequate = cardio_status.completion_ratio >= min_cardio_ratio
+    cardio_adequate = has_cardio and cardio_status.completion_ratio >= min_cardio_ratio
+    hybrid_adequate = (
+        has_cardio
+        and distinct_exercises >= 2
+        and working_sets >= min_hybrid_working_sets
+        and primary_muscles_hit >= 1
+    )
 
     # Combined work — both contribute
     if has_strength and has_cardio:
-        if strength_adequate or cardio_adequate:
-            parts = []
-            if has_strength:
-                parts.append(f"{total_effective_sets:.0f} sets")
-            if has_cardio:
-                parts.append(f"{cardio_status.effective_duration_minutes:.0f}min cardio")
+        if strength_adequate or cardio_adequate or hybrid_adequate:
+            parts = [
+                f"{working_sets:.0f} working sets ({distinct_exercises} exercises)",
+                f"{cardio_status.effective_duration_minutes:.0f}min cardio",
+            ]
             reason_parts.append(
                 f"Mixed session: {' + '.join(parts)} — well-rounded workout."
             )
             return True, "high", reason_parts
         else:
-            parts = []
-            if has_strength:
-                parts.append(f"{total_effective_sets:.0f} effective sets")
-            if has_cardio:
-                parts.append(f"{cardio_status.effective_duration_minutes:.0f}min cardio")
+            parts = [
+                f"{working_sets:.0f} working sets",
+                f"{cardio_status.effective_duration_minutes:.0f}min cardio",
+            ]
             reason_parts.append(
                 f"Mixed session: {' + '.join(parts)} — consider adding a bit more work."
             )
@@ -819,28 +965,30 @@ def _evaluate_mixed_session(
 
     # Strength only
     if has_strength:
-        if total_effective_sets >= max_session_sets:
-            reason_parts.append(f"{total_effective_sets:.0f} effective sets — substantial session.")
+        if working_sets >= max_session_sets and distinct_exercises >= 2 and enough_structure:
+            reason_parts.append(f"{working_sets:.0f} working sets — substantial session.")
             return True, "high", reason_parts
         if strength_adequate:
             reason_parts.append(
-                f"{total_effective_sets:.0f} effective sets across {muscle_groups_hit} muscle groups."
+                f"{working_sets:.0f} working sets across {distinct_exercises} exercises and "
+                f"{primary_muscles_hit} primary muscle groups."
             )
             return True, "medium" if unmapped_strength > 0 else "high", reason_parts
         # Handle unmapped exercises
-        if unmapped_strength > 0 and total_raw_sets >= min_sets:
+        if unmapped_strength > 0 and total_raw_sets >= min_working_sets:
             reason_parts.append(
                 f"{total_raw_sets} raw sets but {unmapped_strength} unmapped exercise(s)."
             )
-            if total_raw_sets >= min_sets * 1.5 and enough_variety:
+            if total_raw_sets >= min_working_sets * 1.5 and enough_variety:
                 return True, "low", reason_parts
-        if total_effective_sets > 0:
+        if working_sets > 0:
             reason_parts.append(
-                f"{total_effective_sets:.0f} effective sets so far — aim for {min_sets:.0f}+."
+                f"{working_sets:.0f} working sets ({distinct_exercises}/{MIN_DISTINCT_STRENGTH_EXERCISES} exercises) "
+                f"so far — aim for {min_working_sets:.0f}+ working sets across {MIN_DISTINCT_STRENGTH_EXERCISES}+ exercises."
             )
         else:
             reason_parts.append("Strength exercises logged but no effective volume tracked.")
-        return False, "medium" if total_effective_sets > 0 else "low", reason_parts
+        return False, "medium" if working_sets > 0 else "low", reason_parts
 
     # Cardio only
     if has_cardio:
@@ -856,6 +1004,13 @@ def _evaluate_mixed_session(
         return False, "medium", reason_parts
 
     # Nothing meaningful
+    if cardio_status.has_missing_duration:
+        dist_str = f" ({cardio_status.total_distance_km:.1f}km)" if cardio_status.total_distance_km > 0 else ""
+        reason_parts.append(
+            f"Cardio logged{dist_str} without duration — duration is unknown or incomplete, unable to evaluate adequacy."
+        )
+        return False, "low", reason_parts
+
     reason_parts.append("No meaningful strength or cardio work detected yet.")
     return False, "low", reason_parts
 
@@ -863,6 +1018,101 @@ def _evaluate_mixed_session(
 # ──────────────────────────────────────────────────────────────────────
 # WEEKLY PROGRESS EVALUATION
 # ──────────────────────────────────────────────────────────────────────
+
+def _is_meaningful_training_day(
+    day_exercises: list[Exercise],
+    goal: UserGoal | None,
+    mappings_by_catalog_id: dict[int, list[ExerciseMuscleMapping]],
+) -> bool:
+    """
+    Determine whether the exercises logged on a single calendar day
+    represent a meaningful training day (as opposed to a trivial single set
+    or 5-minute entry). Used for counting `trained_days_this_week` and
+    rest-day eligibility.
+    """
+    if not day_exercises:
+        return False
+
+    sess = evaluate_session_adequacy(day_exercises, goal, mappings_by_catalog_id)
+    if sess.is_adequate:
+        return True
+
+    experience = (goal.training_experience or "beginner").lower() if goal else "beginner"
+    cardio = evaluate_cardio_session(day_exercises, experience)
+    if cardio.has_meaningful_cardio:
+        return True
+
+    strength_exs = [
+        e for e in day_exercises
+        if (e.category or "").lower() in ("strength", "other")
+        and e.sets is not None and e.sets > 0
+    ]
+    working_sets = _calculate_working_sets(strength_exs)
+    distinct = _distinct_exercise_count(strength_exs)
+    min_ws = 5.0 if experience == "beginner" else (6.0 if experience == "intermediate" else 8.0)
+    return working_sets >= min_ws and distinct >= 2
+
+
+def _detect_weekly_routine(
+    by_date: dict[Date, list[Exercise]],
+    mappings_by_catalog_id: dict[int, list[ExerciseMuscleMapping]],
+) -> str:
+    """
+    Detect the user's weekly routine structure across logged days:
+    - "full_body": sessions hit both upper and lower body
+    - "upper_lower": sessions alternate between upper and lower body
+    - "split": focused body-part sessions
+    - "cardio_focused": primarily cardio sessions
+    - "unstarted": no meaningful sessions yet
+    """
+    if not by_date:
+        return "unstarted"
+
+    splits: list[str] = []
+    has_cardio_days = False
+    for d_exs in by_date.values():
+        sp = detect_session_split(d_exs, mappings_by_catalog_id)
+        if sp:
+            splits.append(sp)
+        elif any((e.category or "").lower() == "cardio" for e in d_exs):
+            has_cardio_days = True
+
+    if not splits:
+        return "cardio_focused" if has_cardio_days else "unstarted"
+
+    if "full" in splits:
+        return "full_body"
+    if "upper" in splits and "lower" in splits:
+        return "upper_lower"
+    return "split"
+
+
+def _is_core_region_covered(
+    region_muscles: set[str],
+    muscle_volumes: dict[str, MuscleVolume],
+) -> bool:
+    """
+    A core functional region (upper_push, upper_pull, lower_body) is covered
+    when at least one muscle group in that region reaches its weekly target
+    OR the combined effective sets across the region meet the region's minimum
+    target threshold.
+    """
+    for mg in region_muscles:
+        mv = muscle_volumes.get(mg)
+        if mv and mv.status in ("adequate", "high"):
+            return True
+
+    region_sets = sum(
+        muscle_volumes[mg].effective_sets
+        for mg in region_muscles
+        if mg in muscle_volumes
+    )
+    min_target = min(
+        (muscle_volumes[mg].target_min for mg in region_muscles if mg in muscle_volumes),
+        default=6.0,
+    )
+    return region_sets >= min_target
+
 
 def evaluate_weekly_progress(
     week_exercises: list[Exercise],
@@ -874,13 +1124,26 @@ def evaluate_weekly_progress(
     Evaluate the user's weekly training progress.
 
     This is SEPARATE from session adequacy. Weekly progress tracks
-    cumulative muscle-group volume and training frequency across
-    the whole week.
+    cumulative volume, functional routine balance, and training frequency
+    across the whole week without requiring every single accessory or
+    isolated muscle group to hit an independent target.
     """
     targets = calculate_weekly_targets(goal)
     weekly_volume = aggregate_volume(week_exercises, mappings_by_catalog_id)
     training_days = (goal.training_days_per_week or 3) if goal else 3
-    trained_days = len({e.date for e in week_exercises})
+    goal_type = (goal.goal_type or "improve_fitness").lower() if goal else "improve_fitness"
+    experience = (goal.training_experience or "beginner").lower() if goal else "beginner"
+
+    by_date: dict[Date, list[Exercise]] = {}
+    for ex in week_exercises:
+        by_date.setdefault(ex.date, []).append(ex)
+
+    trained_days = sum(
+        1
+        for d_exs in by_date.values()
+        if _is_meaningful_training_day(d_exs, goal, mappings_by_catalog_id)
+    )
+    detected_routine = _detect_weekly_routine(by_date, mappings_by_catalog_id)
 
     # Build per-muscle-group status
     muscle_volumes: dict[str, MuscleVolume] = {}
@@ -894,17 +1157,76 @@ def evaluate_weekly_progress(
         )
         muscle_volumes[mg] = mv
 
-    # Determine overall status
-    adequate_count = sum(1 for mv in muscle_volumes.values() if mv.status in ("adequate", "high"))
-    high_count = sum(1 for mv in muscle_volumes.values() if mv.status == "high")
-    total = len(ALL_MUSCLE_GROUPS)
+    # Core functional region coverage (upper_push, upper_pull, lower_body)
+    core_regions_covered = sum(
+        1
+        for r_muscles in CORE_REGIONS.values()
+        if _is_core_region_covered(r_muscles, muscle_volumes)
+    )
 
-    if adequate_count >= total * 0.7:
-        overall_status = "adequate"
-    elif high_count > total * 0.5:
-        overall_status = "high"
-    else:
+    # Major muscle group metrics (chest, back, shoulders, quads, hamstrings, glutes)
+    major_adequate = sum(
+        1 for mg in MAJOR_MUSCLE_GROUPS if muscle_volumes[mg].status in ("adequate", "high")
+    )
+    major_meaningful = sum(
+        1
+        for mg in MAJOR_MUSCLE_GROUPS
+        if muscle_volumes[mg].effective_sets >= muscle_volumes[mg].target_min * 0.65
+    )
+    major_high = sum(
+        1 for mg in MAJOR_MUSCLE_GROUPS if muscle_volumes[mg].status == "high"
+    )
+
+    # Weekly strength working sets and cardio minutes
+    week_strength_exs = [
+        e for e in week_exercises
+        if (e.category or "").lower() in ("strength", "other")
+        and e.sets is not None and e.sets > 0
+    ]
+    weekly_working_sets = _calculate_working_sets(week_strength_exs)
+    min_session_ws = 6.0 if experience == "beginner" else (8.0 if experience == "intermediate" else 10.0)
+
+    min_days_needed = training_days if training_days <= 3 else max(3, training_days - 1)
+    freq_adequate = trained_days >= min_days_needed
+    volume_adequate = weekly_working_sets >= min_days_needed * min_session_ws
+
+    cardio_target = WEEKLY_CARDIO_TARGET_MIN.get(
+        goal_type, DEFAULT_WEEKLY_CARDIO_TARGET_MIN
+    )
+    cardio_mins = sum(
+        (ex.duration_minutes or 0) * CARDIO_EQUIV.get((ex.intensity or "moderate").lower(), 1.0)
+        for ex in week_exercises
+        if (ex.category or "").lower() == "cardio" and ex.duration_minutes and ex.duration_minutes > 0
+    )
+
+    # Determine overall weekly status (accounting for routine and frequency)
+    if not freq_adequate:
         overall_status = "insufficient"
+    elif goal_type in CARDIO_PRIMARY_GOALS:
+        if cardio_mins >= cardio_target * 1.4:
+            overall_status = "high"
+        elif cardio_mins >= cardio_target * 0.8 or (core_regions_covered == 3 and volume_adequate):
+            overall_status = "adequate"
+        else:
+            overall_status = "insufficient"
+    else:
+        if major_high >= 3 and core_regions_covered >= 2:
+            overall_status = "high"
+        elif (
+            # Full-body / balanced routine: all 3 core regions covered with meaningful major-muscle work
+            (core_regions_covered == 3 and major_meaningful >= 4 and volume_adequate)
+            # Split / upper-lower routine: at least 4 of 6 major muscle groups adequate across 2+ regions
+            or (major_adequate >= 4 and core_regions_covered >= 2)
+            # Mixed goal: balanced strength + cardio across the planned training days
+            or (
+                goal_type not in STRENGTH_PRIMARY_GOALS
+                and core_regions_covered >= 2
+                and (cardio_mins >= cardio_target * 0.5 or volume_adequate)
+            )
+        ):
+            overall_status = "adequate"
+        else:
+            overall_status = "insufficient"
 
     # Is it reasonable to suggest a rest day?
     is_rest_eligible = trained_days >= training_days
@@ -915,6 +1237,8 @@ def evaluate_weekly_progress(
         trained_days_this_week=trained_days,
         training_days_target=training_days,
         is_rest_day_eligible=is_rest_eligible,
+        detected_routine=detected_routine,
+        core_regions_covered=core_regions_covered,
     )
 
 
@@ -1277,20 +1601,23 @@ def _generate_next_recommendations(
         return ["Today is a good rest day. You've already hit your weekly training target."]
 
     if session_action == "workout_adequate":
-        # Find undertrained muscles for the next session
-        undertrained = sorted(
-            [mv for mv in muscle_volumes.values() if mv.status == "undertrained"],
+        # Prioritize undertrained major muscle groups for the next session
+        undertrained_major = sorted(
+            [
+                mv for mv in muscle_volumes.values()
+                if mv.status == "undertrained" and mv.muscle_group in MAJOR_MUSCLE_GROUPS
+            ],
             key=lambda mv: mv.effective_sets / max(mv.target_min, 0.1),
         )
-        if undertrained:
-            names = [mv.muscle_group.replace("_", "/") for mv in undertrained[:3]]
+        if undertrained_major:
+            names = [mv.muscle_group.replace("_", "/") for mv in undertrained_major[:3]]
             return [
                 f"Good session! For your next workout, prioritize: {', '.join(names)}."
             ]
         return ["You've done enough for today. Great work!"]
 
     # session_action == "continue_workout"
-    # Find muscles that need the most work, respecting split context
+    # Find muscles that need the most work, respecting split context and major-muscle priority
     target_muscles = _get_relevant_muscles_for_split(detected_split)
 
     undertrained_relevant = sorted(
@@ -1298,7 +1625,10 @@ def _generate_next_recommendations(
             mv for mv in muscle_volumes.values()
             if mv.status == "undertrained" and mv.muscle_group in target_muscles
         ],
-        key=lambda mv: mv.effective_sets / max(mv.target_min, 0.1),
+        key=lambda mv: (
+            0 if mv.muscle_group in MAJOR_MUSCLE_GROUPS else 1,
+            mv.effective_sets / max(mv.target_min, 0.1),
+        ),
     )
 
     if not undertrained_relevant:
@@ -1374,10 +1704,13 @@ def _generate_adequacy_text(
             )
         else:
             summary = "Ready to Train"
-            # Find most undertrained muscles
+            # Find most undertrained major muscles first
             undertrained = sorted(
                 [mv for mv in weekly_progress.muscle_volumes.values() if mv.status == "undertrained"],
-                key=lambda mv: mv.effective_sets / max(mv.target_min, 0.1),
+                key=lambda mv: (
+                    0 if mv.muscle_group in MAJOR_MUSCLE_GROUPS else 1,
+                    mv.effective_sets / max(mv.target_min, 0.1),
+                ),
             )
             if undertrained:
                 names = [mv.muscle_group.replace("_", "/") for mv in undertrained[:3]]
@@ -1394,11 +1727,18 @@ def _generate_adequacy_text(
         # Use the session adequacy reason which explains WHY it's adequate
         detail = session_adequacy.reason
 
-        # Add weekly context
-        undertrained = [mv for mv in weekly_progress.muscle_volumes.values() if mv.status == "undertrained"]
-        if undertrained:
-            names = sorted([mv.muscle_group.replace("_", "/") for mv in undertrained[:3]])
-            detail += f" Next session, prioritize: {', '.join(names)}."
+        # Add weekly context for major undertrained muscles if weekly progress is not yet complete
+        if weekly_progress.overall_status == "insufficient":
+            undertrained_major = sorted(
+                [
+                    mv for mv in weekly_progress.muscle_volumes.values()
+                    if mv.status == "undertrained" and mv.muscle_group in MAJOR_MUSCLE_GROUPS
+                ],
+                key=lambda mv: mv.effective_sets / max(mv.target_min, 0.1),
+            )
+            if undertrained_major:
+                names = [mv.muscle_group.replace("_", "/") for mv in undertrained_major[:3]]
+                detail += f" Next session, prioritize: {', '.join(names)}."
 
     elif session_action == "continue_workout":
         summary = "Keep Going"

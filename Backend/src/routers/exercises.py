@@ -13,6 +13,7 @@ from src.models import (
     WorkoutSession,
 )
 from src.schemas import (
+    CardioStatusOut,
     CardioWeekOut,
     CustomExerciseCreate,
     CustomExerciseUpdate,
@@ -426,6 +427,17 @@ def get_training_adequacy(
             minutes=adequacy.cardio_week.minutes,
             target_minutes=adequacy.cardio_week.target_minutes,
             status=adequacy.cardio_week.status,
+        ),
+        cardio_status=CardioStatusOut(
+            total_duration_minutes=adequacy.session_adequacy.cardio_status.total_duration_minutes,
+            effective_duration_minutes=adequacy.session_adequacy.cardio_status.effective_duration_minutes,
+            target_minutes=adequacy.session_adequacy.cardio_status.target_minutes,
+            min_minutes=adequacy.session_adequacy.cardio_status.min_minutes,
+            has_meaningful_cardio=adequacy.session_adequacy.cardio_status.has_meaningful_cardio,
+            completion_ratio=adequacy.session_adequacy.cardio_status.completion_ratio,
+            duration_status=adequacy.session_adequacy.cardio_status.duration_status,
+            has_missing_duration=adequacy.session_adequacy.cardio_status.has_missing_duration,
+            total_distance_km=adequacy.session_adequacy.cardio_status.total_distance_km,
         ),
     )
 

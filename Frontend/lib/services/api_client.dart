@@ -12,13 +12,23 @@ import '../models/models.dart';
 const bool kEnableDevAdmin =
     bool.fromEnvironment('ENABLE_DEV_ADMIN', defaultValue: true);
 
-String get kBaseUrl {
+const String _customBaseUrlKey = 'custom_api_base_url';
+String? _customBaseUrl;
+
+String get kDefaultBaseUrl {
   const override = String.fromEnvironment('API_BASE_URL');
   if (override.isNotEmpty) return override;
   if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
     return 'http://10.0.2.2:8000';
   }
   return 'http://127.0.0.1:8000';
+}
+
+String get kBaseUrl {
+  if (_customBaseUrl != null && _customBaseUrl!.isNotEmpty) {
+    return _customBaseUrl!;
+  }
+  return kDefaultBaseUrl;
 }
 
 // ─────────────────────────────────────────
@@ -72,6 +82,58 @@ class ApiClient {
         if (entry.value.any(changed.contains)) entry.key();
       }
     });
+  }
+
+  // ── Base URL & Server Configuration ──────────────────────
+
+  static Future<void> initBaseUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    _customBaseUrl = prefs.getString(_customBaseUrlKey);
+  }
+
+  static String getBaseUrl() => kBaseUrl;
+
+  static String getDefaultBaseUrl() => kDefaultBaseUrl;
+
+  static bool get hasCustomBaseUrl =>
+      _customBaseUrl != null && _customBaseUrl!.isNotEmpty;
+
+  static Future<void> setCustomBaseUrl(String? url) async {
+    final prefs = await SharedPreferences.getInstance();
+    var clean = url?.trim() ?? '';
+    clean = clean.replaceAll(RegExp(r'/+$'), '');
+    if (clean.isEmpty) {
+      _customBaseUrl = null;
+      await prefs.remove(_customBaseUrlKey);
+    } else {
+      if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+        clean = 'http://$clean';
+      }
+      _customBaseUrl = clean;
+      await prefs.setString(_customBaseUrlKey, clean);
+    }
+  }
+
+  /// Pings the backend root endpoint '/' to verify connectivity.
+  static Future<({bool ok, String message})> testConnection([String? testUrl]) async {
+    String target = testUrl?.trim() ?? kBaseUrl;
+    target = target.replaceAll(RegExp(r'/+$'), '');
+    if (target.isEmpty) {
+      return (ok: false, message: 'Server URL cannot be empty');
+    }
+    if (!target.startsWith('http://') && !target.startsWith('https://')) {
+      target = 'http://$target';
+    }
+    try {
+      final uri = Uri.parse('$target/');
+      final res = await http.get(uri).timeout(const Duration(seconds: 4));
+      if (res.statusCode == 200) {
+        return (ok: true, message: 'Connected to server successfully (200 OK)');
+      }
+      return (ok: false, message: 'Server responded with HTTP ${res.statusCode}');
+    } catch (e) {
+      return (ok: false, message: '$e');
+    }
   }
 
   // ── Token storage ──────────────────────
