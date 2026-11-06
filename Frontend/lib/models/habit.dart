@@ -6,6 +6,8 @@ class Habit {
   final String color;
   final int targetPerWeek;
   final String? createdAt;
+  final bool isArchived;
+  final String? archivedAt;
 
   const Habit({
     required this.id,
@@ -15,6 +17,8 @@ class Habit {
     this.color = '#6366F1',
     this.targetPerWeek = 7,
     this.createdAt,
+    this.isArchived = false,
+    this.archivedAt,
   });
 
   factory Habit.fromJson(Map<String, dynamic> json) {
@@ -28,6 +32,8 @@ class Habit {
       color: json['color'] as String? ?? '#6366F1',
       targetPerWeek: (json['target_per_week'] as num?)?.toInt() ?? 7,
       createdAt: json['created_at']?.toString(),
+      isArchived: json['is_archived'] as bool? ?? false,
+      archivedAt: json['archived_at']?.toString(),
     );
   }
 }

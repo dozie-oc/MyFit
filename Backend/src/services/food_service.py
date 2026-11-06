@@ -697,16 +697,31 @@ class FoodService:
 
         normalized_unit = unit.strip().lower()
 
-        if normalized_unit in {
-            "g",
-            "gram",
-            "grams",
-        }:
-            return quantity
+        direct_unit_to_grams = {
+            "g": 1.0,
+            "gram": 1.0,
+            "grams": 1.0,
+            "kg": 1000.0,
+            "kilogram": 1000.0,
+            "kilograms": 1000.0,
+            "oz": 28.3495,
+            "ounce": 28.3495,
+            "ounces": 28.3495,
+            "lb": 453.592,
+            "lbs": 453.592,
+            "pound": 453.592,
+            "pounds": 453.592,
+            "ml": 1.0,
+            "milliliter": 1.0,
+            "milliliters": 1.0,
+        }
+
+        if normalized_unit in direct_unit_to_grams:
+            return quantity * direct_unit_to_grams[normalized_unit]
 
         raise ValueError(
             "Unsupported direct food unit. "
-            "Use a FoodPortion or enter the quantity in grams."
+            "Use a FoodPortion or enter a supported direct unit (g, kg, oz, lb, ml)."
         )
 
     # ============================================================

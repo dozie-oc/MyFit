@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
-import 'custom_food_screen.dart';
 import 'recommendation_sheet.dart';
 import '../widgets/food_picker_sheet.dart';
 import '../main.dart' show TabActivatedNotifier;
@@ -70,7 +69,7 @@ class _MealsScreenState extends State<MealsScreen> {
             onPressed: () async {
               final created = await Navigator.push<bool>(
                 context,
-                MaterialPageRoute(builder: (_) => const _AddMealScreen()),
+                MaterialPageRoute(builder: (_) => const MealEditorScreen()),
               );
               if (created == true) _reload();
             },
@@ -307,32 +306,58 @@ class _MealDetailSheet extends StatelessWidget {
             );
           }),
           const SizedBox(height: 16),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.replay_outlined, size: 16),
-            label: const Text('Log again'),
-            onPressed: () async {
-              final now = DateTime.now();
-              final today =
-                  '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-              try {
-                await ApiClient.copyMeal(meal.id, date: today);
-                if (context.mounted) {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Logged again for today')),
-                  );
-                }
-              } on ApiException catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(e.message),
-                      backgroundColor: Colors.red.shade700,
-                    ),
-                  );
-                }
-              }
-            },
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.edit_outlined, size: 16),
+                  label: const Text('Edit meal'),
+                  onPressed: () async {
+                    final navigator = Navigator.of(context);
+                    navigator.pop();
+                    final updated = await navigator.push<bool>(
+                      MaterialPageRoute(
+                        builder: (_) => MealEditorScreen(existingMeal: meal),
+                      ),
+                    );
+                    if (updated == true) {
+                      onDeleted();
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.replay_outlined, size: 16),
+                  label: const Text('Log again'),
+                  onPressed: () async {
+                    final now = DateTime.now();
+                    final today =
+                        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+                    try {
+                      await ApiClient.copyMeal(meal.id, date: today);
+                      if (context.mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content: Text('Logged again for today')),
+                        );
+                      }
+                    } on ApiException catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(e.message),
+                            backgroundColor: Colors.red.shade700,
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 24),
         ],
@@ -342,34 +367,97 @@ class _MealDetailSheet extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────
-// ADD MEAL SCREEN
+// MEAL EDITOR SCREEN (CREATE OR EDIT MEAL)
 // ─────────────────────────────────────────
 
-class _AddMealScreen extends StatefulWidget {
-  const _AddMealScreen();
+const Map<String, String> _kDirectUnitLabels = {
+  'g': 'Grams (g)',
+  'oz': 'Ounces (oz)',
+  'ml': 'Milliliters (ml)',
+  'kg': 'Kilograms (kg)',
+  'lb': 'Pounds (lb)',
+};
+
+class MealEditorScreen extends StatefulWidget {
+  final Meal? existingMeal;
+  final List<DraftMealItem>? initialItems;
+  final bool loadCatalogOnInit;
+  final Future<PickedFoodItem?> Function(
+      BuildContext context, DraftMealItem? existingItem)? onPickFood;
+  final Future<void> Function(
+      Map<String, dynamic> payload, int? existingMealId)? onSubmitMeal;
+
+  const MealEditorScreen({
+    super.key,
+    this.existingMeal,
+    this.initialItems,
+    this.loadCatalogOnInit = true,
+    this.onPickFood,
+    this.onSubmitMeal,
+  });
 
   @override
-  State<_AddMealScreen> createState() => _AddMealScreenState();
+  State<MealEditorScreen> createState() => _MealEditorScreenState();
 }
 
-class _AddMealScreenState extends State<_AddMealScreen> {
-  DateTime _date = DateTime.now();
-  String _mealType = 'breakfast';
-  final List<_DraftMealItem> _items = [];
+class _MealEditorScreenState extends State<MealEditorScreen> {
+  late DateTime _date;
+  late String _mealType;
+  final List<DraftMealItem> _items = [];
   bool _saving = false;
+
+  bool get _isEditing => widget.existingMeal != null;
 
   @override
   void initState() {
     super.initState();
-    final hour = DateTime.now().hour;
-    if (hour < 11) {
-      _mealType = 'breakfast';
-    } else if (hour < 16) {
-      _mealType = 'lunch';
-    } else if (hour < 21) {
-      _mealType = 'dinner';
+    final existing = widget.existingMeal;
+    if (existing != null) {
+      _date = DateTime.tryParse(existing.date) ?? DateTime.now();
+      _mealType = existing.mealType.isNotEmpty ? existing.mealType : 'snack';
+      _items.addAll(
+        existing.items.map((item) => DraftMealItem.fromMealItem(item)),
+      );
+      if (widget.loadCatalogOnInit) {
+        _hydrateCatalogFoods();
+      }
     } else {
-      _mealType = 'snack';
+      _date = DateTime.now();
+      final hour = _date.hour;
+      if (hour < 11) {
+        _mealType = 'breakfast';
+      } else if (hour < 16) {
+        _mealType = 'lunch';
+      } else if (hour < 21) {
+        _mealType = 'dinner';
+      } else {
+        _mealType = 'snack';
+      }
+    }
+
+    if (widget.initialItems != null) {
+      _items
+        ..clear()
+        ..addAll(widget.initialItems!);
+    }
+  }
+
+  Future<void> _hydrateCatalogFoods() async {
+    try {
+      final foods = await ApiClient.getFoods();
+      if (!mounted) return;
+      final byId = {for (final f in foods) f.id: f};
+      setState(() {
+        for (var i = 0; i < _items.length; i++) {
+          final current = _items[i];
+          final loaded = byId[current.food.id];
+          if (loaded != null) {
+            _items[i] = current.withCatalogFood(loaded);
+          }
+        }
+      });
+    } catch (_) {
+      // Keep snapshot-derived food details if catalog fetch fails offline.
     }
   }
 
@@ -386,26 +474,57 @@ class _AddMealScreenState extends State<_AddMealScreen> {
   String get _dateStr =>
       '${_date.year}-${_date.month.toString().padLeft(2, '0')}-${_date.day.toString().padLeft(2, '0')}';
 
-  Future<void> _addItem() async {
-    final picked = await showModalBottomSheet<PickedFoodItem>(
+  Future<PickedFoodItem?> _openPicker({DraftMealItem? existingItem}) {
+    if (widget.onPickFood != null) {
+      return widget.onPickFood!(context, existingItem);
+    }
+    return showModalBottomSheet<PickedFoodItem>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => const FoodPickerSheet(),
+      builder: (_) => FoodPickerSheet(
+        initialFood: existingItem?.food,
+        initialPortionId: existingItem?.portionId,
+        initialQuantity: existingItem?.quantity,
+        initialUnit: existingItem?.portionId == null ? existingItem?.unit : null,
+        confirmLabel: existingItem != null ? 'Update Food' : 'Add to Meal',
+      ),
     );
-    if (picked != null) {
+  }
+
+  Future<void> _addItem() async {
+    final picked = await _openPicker();
+    if (picked != null && mounted) {
       setState(() {
-        _items.add(_DraftMealItem(
-          foodId: picked.food.id,
-          foodName: picked.food.name,
-          quantity: picked.quantity,
-          portionId: picked.portionId,
-          portionName: picked.portionName,
-          unit: picked.unit,
-        ));
+        _items.add(picked.toDraftMealItem());
       });
     }
+  }
+
+  Future<void> _changeItemFood(int index) async {
+    if (index < 0 || index >= _items.length) return;
+    final current = _items[index];
+    final picked = await _openPicker(existingItem: current);
+    if (picked != null && mounted) {
+      setState(() {
+        _items[index] = picked.toDraftMealItem();
+      });
+    }
+  }
+
+  void _updateItem(int index, DraftMealItem updated) {
+    if (index < 0 || index >= _items.length) return;
+    setState(() {
+      _items[index] = updated;
+    });
+  }
+
+  void _removeItem(int index) {
+    if (index < 0 || index >= _items.length) return;
+    setState(() {
+      _items.removeAt(index);
+    });
   }
 
   Future<void> _showQuickAddDialog() async {
@@ -530,22 +649,27 @@ class _AddMealScreenState extends State<_AddMealScreen> {
           const SnackBar(content: Text('Add at least one food item.')));
       return;
     }
+    if (_items.any((it) => it.quantity <= 0)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Each food item must have a quantity greater than 0.')));
+      return;
+    }
+
     setState(() => _saving = true);
     try {
-      final payloadItems = _items.map((it) {
-        return <String, dynamic>{
-          'food_id': it.foodId,
-          'quantity': it.quantity,
-          if (it.portionId != null) 'portion_id': it.portionId,
-          if (it.unit != null) 'unit': it.unit,
-        };
-      }).toList();
-
-      await ApiClient.createMeal({
+      final payload = <String, dynamic>{
         'date': _dateStr,
         'meal_type': _mealType,
-        'items': payloadItems,
-      });
+        'items': _items.map((it) => it.toItemPayload()).toList(),
+      };
+
+      if (widget.onSubmitMeal != null) {
+        await widget.onSubmitMeal!(payload, widget.existingMeal?.id);
+      } else if (_isEditing) {
+        await ApiClient.updateMeal(widget.existingMeal!.id, payload);
+      } else {
+        await ApiClient.createMeal(payload);
+      }
       if (mounted) Navigator.pop(context, true);
     } on ApiException catch (e) {
       if (mounted) {
@@ -560,18 +684,20 @@ class _AddMealScreenState extends State<_AddMealScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final totals = computeMealTotals(_items);
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('New Meal'),
+        title: Text(_isEditing ? 'Edit Meal' : 'New Meal'),
         actions: [
           TextButton(
+            key: const Key('save-meal-button'),
             onPressed: _saving ? null : _save,
             child: _saving
                 ? const SizedBox(
                     width: 18,
                     height: 18,
-                    child:
-                        CircularProgressIndicator(strokeWidth: 2))
+                    child: CircularProgressIndicator(strokeWidth: 2))
                 : const Text('Save'),
           ),
         ],
@@ -600,22 +726,76 @@ class _AddMealScreenState extends State<_AddMealScreen> {
               setState(() => _mealType = newVal.first);
             },
           ),
-          const SizedBox(height: 20),
-          Row(
+          const SizedBox(height: 16),
+          Container(
+            key: const Key('meal-totals-card'),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF9FAFB),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'Meal Totals',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF111827),
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${_items.length} ${_items.length == 1 ? 'item' : 'items'} · ${totals.totalGrams.toStringAsFixed(0)}g',
+                      key: const Key('meal-totals-weight'),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                NutrientRow(
+                  calories: totals.calories,
+                  protein: totals.protein,
+                  carbs: totals.carbs,
+                  fat: totals.fat,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 4,
             children: [
               const Text('Items',
                   style: TextStyle(
                       fontWeight: FontWeight.w600, fontSize: 15)),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: _saving ? null : _showQuickAddDialog,
-                icon: const Icon(Icons.bolt, size: 16),
-                label: const Text('Quick add'),
-              ),
-              TextButton.icon(
-                onPressed: _addItem,
-                icon: const Icon(Icons.add, size: 16),
-                label: const Text('Add food'),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (!_isEditing)
+                    TextButton.icon(
+                      onPressed: _saving ? null : _showQuickAddDialog,
+                      icon: const Icon(Icons.bolt, size: 16),
+                      label: const Text('Quick add'),
+                    ),
+                  TextButton.icon(
+                    key: const Key('add-food-button'),
+                    onPressed: _saving ? null : _addItem,
+                    icon: const Icon(Icons.add, size: 16),
+                    label: const Text('Add food'),
+                  ),
+                ],
               ),
             ],
           ),
@@ -630,26 +810,13 @@ class _AddMealScreenState extends State<_AddMealScreen> {
             ..._items.asMap().entries.map((e) {
               final i = e.key;
               final item = e.value;
-              final name = item.foodName;
-              final portionName = item.portionName;
-              final subtitle = portionName != null
-                  ? '${item.quantity}× $portionName'
-                  : '${item.quantity}${item.unit ?? 'g'}';
-              return Card(
-                margin: const EdgeInsets.symmetric(vertical: 4),
-                child: ListTile(
-                  dense: true,
-                  title: Text(name,
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                  subtitle: Text(subtitle,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.close,
-                        size: 18, color: Color(0xFF9CA3AF)),
-                    onPressed: () =>
-                        setState(() => _items.removeAt(i)),
-                  ),
-                ),
+              return _MealDraftItemCard(
+                key: ValueKey('draft-meal-item-$i-${item.food.id}'),
+                index: i,
+                item: item,
+                onChangeFood: () => _changeItemFood(i),
+                onChanged: (updated) => _updateItem(i, updated),
+                onRemove: () => _removeItem(i),
               );
             }),
         ],
@@ -658,358 +825,243 @@ class _AddMealScreenState extends State<_AddMealScreen> {
   }
 }
 
-// ─────────────────────────────────────────
-// ADD MEAL ITEM SHEET
-// ─────────────────────────────────────────
+class _MealDraftItemCard extends StatefulWidget {
+  final int index;
+  final DraftMealItem item;
+  final VoidCallback onChangeFood;
+  final ValueChanged<DraftMealItem> onChanged;
+  final VoidCallback onRemove;
 
-/// A food line the user has added to a meal that hasn't been saved yet.
-class _DraftMealItem {
-  final int foodId;
-  final String foodName;
-  final double quantity;
-  final int? portionId;
-  final String? portionName;
-  final String? unit;
-
-  const _DraftMealItem({
-    required this.foodId,
-    required this.foodName,
-    required this.quantity,
-    this.portionId,
-    this.portionName,
-    this.unit,
+  const _MealDraftItemCard({
+    super.key,
+    required this.index,
+    required this.item,
+    required this.onChangeFood,
+    required this.onChanged,
+    required this.onRemove,
   });
-}
-
-class _AddMealItemSheet extends StatefulWidget {
-  const _AddMealItemSheet();
 
   @override
-  State<_AddMealItemSheet> createState() => _AddMealItemSheetState();
+  State<_MealDraftItemCard> createState() => _MealDraftItemCardState();
 }
 
-class _AddMealItemSheetState extends State<_AddMealItemSheet> {
-  final _searchCtrl = TextEditingController();
-  final _qtyCtrl = TextEditingController(text: '100');
-  final _unitCtrl = TextEditingController(text: 'g');
-
-  List<FoodItem>? _foods;
-  FoodItem? _selected;
-  FoodPortion? _selectedPortion;
-  bool _loading = false;
+class _MealDraftItemCardState extends State<_MealDraftItemCard> {
+  late final TextEditingController _qtyCtrl;
 
   @override
   void initState() {
     super.initState();
-    ApiClient.getFoods().then((f) {
-      if (mounted) setState(() => _foods = f);
-    });
+    _qtyCtrl = TextEditingController(text: _formatNumber(widget.item.quantity));
+  }
+
+  @override
+  void didUpdateWidget(covariant _MealDraftItemCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final currentParsed = double.tryParse(_qtyCtrl.text.trim());
+    if (oldWidget.item.food.id != widget.item.food.id ||
+        oldWidget.item.portionId != widget.item.portionId ||
+        oldWidget.item.unit != widget.item.unit ||
+        (currentParsed != null &&
+            (currentParsed - widget.item.quantity).abs() > 1e-4)) {
+      _qtyCtrl.text = _formatNumber(widget.item.quantity);
+    }
   }
 
   @override
   void dispose() {
-    _searchCtrl.dispose();
     _qtyCtrl.dispose();
-    _unitCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _openCreateCustomFood() async {
-    final created = await Navigator.push<FoodItem>(
-      context,
-      MaterialPageRoute(
-        builder: (_) =>
-            CustomFoodScreen(initialName: _searchCtrl.text.trim()),
-      ),
-    );
-    if (created != null && mounted) {
-      setState(() {
-        _foods = [created, ...(_foods ?? const [])];
-        _selected = created;
-        _selectedPortion =
-            created.portions.isNotEmpty ? created.portions.first : null;
-        _qtyCtrl.text = _selectedPortion != null ? '1' : '100';
-      });
-    }
+  String _formatNumber(double val) {
+    if (val == val.roundToDouble()) return val.toInt().toString();
+    return val.toStringAsFixed(1);
   }
 
-  Future<void> _addPersonalPortion() async {
-    if (_selected == null) return;
-    final nameCtrl = TextEditingController();
-    final gramsCtrl = TextEditingController();
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('My portion'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Portion name',
-                hintText: 'e.g. my plate of rice',
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: gramsCtrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: 'Weight (g)',
-                hintText: 'e.g. 240',
-              ),
-            ),
-          ],
+  List<FoodPortion> _availablePortions(DraftMealItem item) {
+    final list = <FoodPortion>[...item.food.portions];
+    if (item.portionId != null &&
+        !list.any((p) => p.id == item.portionId) &&
+        item.portionGramWeight != null) {
+      list.insert(
+        0,
+        FoodPortion(
+          id: item.portionId!,
+          name: item.portionName ?? item.unit,
+          quantity: item.portionBaseQuantity,
+          unit: item.unit,
+          gramWeight: item.portionGramWeight!,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-
-    if (ok != true || !mounted) return;
-    final name = nameCtrl.text.trim();
-    final grams = double.tryParse(gramsCtrl.text.trim());
-    if (name.isEmpty || grams == null || grams <= 0) return;
-
-    try {
-      final createdPortion =
-          await ApiClient.addPortion(_selected!.id, name, grams);
-      final refreshed = await ApiClient.getFood(_selected!.id);
-      if (!mounted) return;
-      setState(() {
-        _selected = refreshed;
-        _foods = _foods
-            ?.map((f) => f.id == refreshed.id ? refreshed : f)
-            .toList();
-        _selectedPortion = refreshed.portions.firstWhere(
-          (p) => p.id == createdPortion.id,
-          orElse: () => createdPortion,
-        );
-        _qtyCtrl.text = '1';
-      });
-    } on ApiException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.message),
-            backgroundColor: Colors.red.shade700,
-          ),
-        );
-      }
+      );
     }
+    return list;
   }
 
-  void _confirm() {
-    if (_selected == null) return;
-    final qty = double.tryParse(_qtyCtrl.text.trim()) ?? 0;
-    if (qty <= 0) return;
+  String _dropdownValue(DraftMealItem item, List<FoodPortion> portions) {
+    if (item.portionId != null &&
+        portions.any((p) => p.id == item.portionId)) {
+      return 'portion:${item.portionId}';
+    }
+    final normalizedUnit = normalizeDirectUnit(item.unit);
+    return 'unit:$normalizedUnit';
+  }
 
-    final portion = _selectedPortion;
-    final item = _DraftMealItem(
-      foodId: _selected!.id,
-      foodName: _selected!.name,
-      quantity: qty,
-      portionId: portion?.id,
-      portionName: portion?.name,
-      unit: portion == null ? _unitCtrl.text.trim().toLowerCase() : null,
-    );
-
-    Navigator.pop(context, item);
+  void _onPortionOrUnitSelected(
+    String? selection,
+    DraftMealItem item,
+    List<FoodPortion> portions,
+  ) {
+    if (selection == null) return;
+    if (selection.startsWith('portion:')) {
+      final id = int.tryParse(selection.substring('portion:'.length));
+      if (id == null) return;
+      FoodPortion? matched;
+      for (final p in portions) {
+        if (p.id == id) {
+          matched = p;
+          break;
+        }
+      }
+      if (matched != null) {
+        final nextQty = item.portionId == null
+            ? (matched.quantity > 0 ? matched.quantity : 1.0)
+            : item.quantity;
+        final updated = item.withPortion(matched, quantity: nextQty);
+        _qtyCtrl.text = _formatNumber(updated.quantity);
+        widget.onChanged(updated);
+      }
+    } else if (selection.startsWith('unit:')) {
+      final newUnit = selection.substring('unit:'.length);
+      final updated = item.withUnit(newUnit);
+      _qtyCtrl.text = _formatNumber(updated.quantity);
+      widget.onChanged(updated);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final portions = _selected?.portions ?? const <FoodPortion>[];
+    final item = widget.item;
+    final i = widget.index;
+    final portions = _availablePortions(item);
+    final selectedValue = _dropdownValue(item, portions);
 
-    return Padding(
-      padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.8,
-        builder: (_, ctrl) => ListView(
-          controller: ctrl,
-          padding: const EdgeInsets.all(20),
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                    color: const Color(0xFFD1D5DB),
-                    borderRadius: BorderRadius.circular(2)),
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text('Select Food',
-                style: TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _searchCtrl,
-              decoration: const InputDecoration(
-                hintText: 'Search food library...',
-                prefixIcon: Icon(Icons.search, size: 20),
-              ),
-              onChanged: (q) {
-                setState(() => _loading = true);
-                Future.delayed(const Duration(milliseconds: 300), () async {
-                  final f = q.trim().isEmpty
-                      ? await ApiClient.getFoods()
-                      : await ApiClient.getFoods(q.trim());
-                  if (mounted) {
-                    setState(() {
-                      _foods = f;
-                      _loading = false;
-                    });
-                  }
-                });
-              },
-            ),
-            const SizedBox(height: 8),
-            if (_loading)
-              const LinearProgressIndicator()
-            else if (_foods != null)
-              Container(
-                constraints: const BoxConstraints(maxHeight: 180),
-                decoration: BoxDecoration(
-                  border: Border.all(color: const Color(0xFFE5E7EB)),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: _foods!.length + 1,
-                  itemBuilder: (_, i) {
-                    if (i == _foods!.length) {
-                      return ListTile(
-                        dense: true,
-                        leading: const Icon(Icons.add_circle_outline,
-                            size: 18, color: Color(0xFF2563EB)),
-                        title: const Text(
-                          "Can't find it? Create a custom food",
-                          style: TextStyle(
-                            fontSize: 13,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(6),
+                    onTap: widget.onChangeFood,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.food.name,
+                          key: Key('item-food-name-$i'),
+                          style: const TextStyle(
+                            fontSize: 14,
                             fontWeight: FontWeight.w600,
-                            color: Color(0xFF2563EB),
                           ),
                         ),
-                        onTap: _openCreateCustomFood,
-                      );
-                    }
-                    final f = _foods![i];
-                    final isSelected = _selected?.id == f.id;
-                    return ListTile(
-                      dense: true,
-                      selected: isSelected,
-                      title: Text(f.name,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 13)),
-                      onTap: () => setState(() {
-                        _selected = f;
-                        _selectedPortion =
-                            f.portions.isNotEmpty ? f.portions.first : null;
-                        _qtyCtrl.text =
-                            _selectedPortion != null ? '1' : '100';
-                      }),
-                      trailing: isSelected
-                          ? const Icon(Icons.check,
-                              size: 16, color: Color(0xFF2563EB))
-                          : null,
-                    );
-                  },
-                ),
-              ),
-            if (_selected != null) ...[
-              const SizedBox(height: 16),
-              const Divider(),
-              const SizedBox(height: 8),
-              Text('Selected: ${_selected!.name}',
-                  style: const TextStyle(
-                       fontWeight: FontWeight.w600, fontSize: 13)),
-              const SizedBox(height: 12),
-              const Text('Choose a serving size',
-                  style: TextStyle(
-                      fontSize: 12, color: Color(0xFF9CA3AF))),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: [
-                  ChoiceChip(
-                    label: const Text('Custom grams'),
-                    selected: _selectedPortion == null,
-                    onSelected: (_) => setState(() {
-                      _selectedPortion = null;
-                      _qtyCtrl.text = '100';
-                    }),
-                  ),
-                  ...portions.map((p) {
-                    final isSelected = _selectedPortion?.id == p.id;
-                    return ChoiceChip(
-                      label: Text(
-                          '${p.name} (${p.gramWeight.toStringAsFixed(0)}g)'),
-                      selected: isSelected,
-                      onSelected: (_) => setState(() {
-                        if (_selectedPortion == null) _qtyCtrl.text = '1';
-                        _selectedPortion = p;
-                      }),
-                    );
-                  }),
-                  ActionChip(
-                    avatar: const Icon(Icons.add, size: 14),
-                    label: const Text('My portion...'),
-                    onPressed: _addPersonalPortion,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _qtyCtrl,
-                      decoration: InputDecoration(
-                          labelText: _selectedPortion != null
-                              ? 'Number of Servings'
-                              : 'Grams'),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      inputFormatters: [
-                        FilteringTextInputFormatter.allow(
-                            RegExp(r'[\d.]'))
+                        const SizedBox(height: 2),
+                        Text(
+                          '${item.gramWeight.toStringAsFixed(0)}g · ${item.calories.toStringAsFixed(0)} kcal · P ${item.protein.toStringAsFixed(1)}g · C ${item.carbs.toStringAsFixed(1)}g · F ${item.fat.toStringAsFixed(1)}g',
+                          key: Key('item-macros-$i'),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF4B5563),
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                  if (_selectedPortion == null) ...[
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextField(
-                        controller: _unitCtrl,
-                        decoration: const InputDecoration(
-                            labelText: 'Unit'),
-                      ),
+                ),
+                IconButton(
+                  key: Key('change-food-$i'),
+                  tooltip: 'Change food',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.swap_horiz,
+                      size: 20, color: Color(0xFF2563EB)),
+                  onPressed: widget.onChangeFood,
+                ),
+                IconButton(
+                  key: Key('remove-item-$i'),
+                  tooltip: 'Remove item',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.delete_outline,
+                      size: 20, color: Color(0xFFEF4444)),
+                  onPressed: widget.onRemove,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                SizedBox(
+                  width: 96,
+                  child: TextField(
+                    key: Key('item-qty-$i'),
+                    controller: _qtyCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))
+                    ],
+                    decoration: InputDecoration(
+                      labelText: item.portionId != null ? 'Servings' : 'Amount',
+                      isDense: true,
                     ),
-                  ],
-                ],
-              ),
-              const SizedBox(height: 20),
-              FilledButton(
-                onPressed: _confirm,
-                child: const Text('Add to Meal'),
-              ),
-            ],
-            const SizedBox(height: 16),
+                    onChanged: (raw) {
+                      final parsed = double.tryParse(raw.trim()) ?? 0.0;
+                      widget.onChanged(item.withQuantity(parsed));
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    key: Key('item-unit-portion-$i-$selectedValue'),
+                    initialValue: selectedValue,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Portion / Unit',
+                      isDense: true,
+                    ),
+                    items: [
+                      ...portions.map(
+                        (p) => DropdownMenuItem<String>(
+                          value: 'portion:${p.id}',
+                          child: Text(
+                            '${p.name} (${p.gramWeight.toStringAsFixed(0)}g)',
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ),
+                      ...kSupportedDirectUnits.map(
+                        (u) => DropdownMenuItem<String>(
+                          value: 'unit:$u',
+                          child: Text(
+                            _kDirectUnitLabels[u] ?? u,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ),
+                    ],
+                    onChanged: (val) =>
+                        _onPortionOrUnitSelected(val, item, portions),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),

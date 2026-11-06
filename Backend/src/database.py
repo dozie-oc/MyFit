@@ -71,6 +71,10 @@ def create_db_and_tables() -> None:
             "ALTER TABLE exercises ADD COLUMN effort_rating INTEGER",
             "ALTER TABLE exercise ADD COLUMN workout_session_id INTEGER REFERENCES workoutsession(id)",
             "ALTER TABLE exercises ADD COLUMN workout_session_id INTEGER REFERENCES workout_sessions(id)",
+            "ALTER TABLE habit ADD COLUMN is_archived BOOLEAN DEFAULT 0",
+            "ALTER TABLE habits ADD COLUMN is_archived BOOLEAN DEFAULT 0",
+            "ALTER TABLE habit ADD COLUMN archived_at DATETIME",
+            "ALTER TABLE habits ADD COLUMN archived_at DATETIME",
         ]
         for migration in _safe_alter_table_migrations:
             try:

@@ -5,6 +5,7 @@ import '../models/models.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
 import '../main.dart' show TabActivatedNotifier;
+import 'archived_habits_screen.dart';
 
 // ─────────────────────────────────────────
 // HABITS SCREEN — HabitKit-style
@@ -22,13 +23,17 @@ const List<Color> kHabitPalette = [
   Color(0xFF14B8A6), // teal
 ];
 
-Color _colorFromHex(String hex) {
+Color colorFromHex(String hex) {
   final h = hex.replaceFirst('#', '');
   return Color(int.parse('FF$h', radix: 16));
 }
 
-String _fmtDate(DateTime d) =>
+Color _colorFromHex(String hex) => colorFromHex(hex);
+
+String fmtDate(DateTime d) =>
     '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+String _fmtDate(DateTime d) => fmtDate(d);
 
 // ─────────────────────────────────────────
 // DAY STATE (derived from the server's /habits/activity)
@@ -37,7 +42,7 @@ String _fmtDate(DateTime d) =>
 enum DayState { completed, eligible, targetMet, future }
 
 /// Today plus the Monday-anchored start of the 5-week grid.
-({DateTime today, DateTime gridStart}) _gridWindow() {
+({DateTime today, DateTime gridStart}) gridWindow() {
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
   final mondayOfThisWeek = today.subtract(Duration(days: today.weekday - 1));
@@ -46,6 +51,8 @@ enum DayState { completed, eligible, targetMet, future }
     gridStart: mondayOfThisWeek.subtract(const Duration(days: 28)),
   );
 }
+
+({DateTime today, DateTime gridStart}) _gridWindow() => gridWindow();
 
 class _HabitsData {
   final List<Habit> habits;
@@ -64,7 +71,7 @@ Map<String, HabitActivityDay> _indexActivity(List<HabitActivityDay> days) {
 /// accounting; a day that is neither completed nor pending (but is on or
 /// after the habit's creation date and not in the future) means the
 /// weekly target was already met.
-Map<String, DayState> _dayStatesFromActivity(
+Map<String, DayState> dayStatesFromActivity(
   Habit habit,
   Map<String, HabitActivityDay> activityByDate,
   DateTime gridStart,
@@ -81,7 +88,7 @@ Map<String, DayState> _dayStatesFromActivity(
   final result = <String, DayState>{};
   for (int i = 0; i < 35; i++) {
     final d = gridStart.add(Duration(days: i));
-    final ds = _fmtDate(d);
+    final ds = fmtDate(d);
 
     if (d.isAfter(today) ||
         (habitCreatedAt != null && d.isBefore(habitCreatedAt))) {
@@ -103,6 +110,13 @@ Map<String, DayState> _dayStatesFromActivity(
   }
   return result;
 }
+
+Map<String, DayState> _dayStatesFromActivity(
+  Habit habit,
+  Map<String, HabitActivityDay> activityByDate,
+  DateTime gridStart,
+  DateTime today,
+) => dayStatesFromActivity(habit, activityByDate, gridStart, today);
 
 // ─────────────────────────────────────────
 // SCREEN
@@ -181,7 +195,21 @@ class _HabitsScreenState extends State<HabitsScreen> {
         title: const Text('Habits'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.archive_outlined),
+            tooltip: 'Archived habits',
+            onPressed: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const ArchivedHabitsScreen(),
+                ),
+              );
+              _reload();
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.add),
+            tooltip: 'Add habit',
             onPressed: () async {
               final created = await showModalBottomSheet<bool>(
                 context: context,
@@ -331,6 +359,63 @@ class _HabitCardState extends State<_HabitCard> {
     return count;
   }
 
+  Future<void> _confirmArchive(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Archive Habit'),
+        content: Text(
+          'Archive "${widget.habit.name}"?\n\n'
+          'Its past completion history will be preserved, and it will no longer appear as an active habit. '
+          'You can view or restore it anytime from Archived habits.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF2563EB),
+            ),
+            child: const Text('Archive'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await ApiClient.archiveHabit(widget.habit.id);
+      widget.onChanged();
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Archived "${widget.habit.name}"'),
+            action: SnackBarAction(
+              label: 'Undo',
+              onPressed: () async {
+                try {
+                  await ApiClient.restoreHabit(widget.habit.id);
+                  widget.onChanged();
+                } catch (_) {}
+              },
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to archive: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final name = widget.habit.name;
@@ -384,14 +469,12 @@ class _HabitCardState extends State<_HabitCard> {
                   ),
                   const SizedBox(width: 8),
                   GestureDetector(
-                    onTap: () async {
-                      try {
-                        await ApiClient.deleteHabit(widget.habit.id);
-                        widget.onChanged();
-                      } catch (_) {}
-                    },
-                    child: const Icon(Icons.delete_outline,
-                        size: 16, color: Color(0xFF9CA3AF)),
+                    onTap: () => _confirmArchive(context),
+                    child: const Tooltip(
+                      message: 'Archive habit',
+                      child: Icon(Icons.archive_outlined,
+                          size: 16, color: Color(0xFF9CA3AF)),
+                    ),
                   ),
                 ],
               ),
@@ -480,14 +563,17 @@ class _HabitCardState extends State<_HabitCard> {
 // HABIT CALENDAR GRID (30-day)
 // ─────────────────────────────────────────
 
-class _HabitCalendarGrid extends StatelessWidget {
+typedef _HabitCalendarGrid = HabitCalendarGrid;
+
+class HabitCalendarGrid extends StatelessWidget {
   final DateTime gridStart;
   final DateTime today;
   final Map<String, DayState> dayStates;
   final Color color;
   final void Function(DateTime) onTapDay;
 
-  const _HabitCalendarGrid({
+  const HabitCalendarGrid({
+    super.key,
     required this.gridStart,
     required this.today,
     required this.dayStates,
@@ -535,7 +621,7 @@ class _HabitCalendarGrid extends StatelessWidget {
                 final canTap = !d.isAfter(today) && state != null;
                 return GestureDetector(
                   onTap: canTap ? () => onTapDay(d) : null,
-                  child: _DayCell(
+                  child: DayCell(
                     day: d,
                     today: today,
                     state: state,
@@ -550,13 +636,14 @@ class _HabitCalendarGrid extends StatelessWidget {
   }
 }
 
-class _DayCell extends StatelessWidget {
+class DayCell extends StatelessWidget {
   final DateTime day;
   final DateTime today;
   final DayState? state;
   final Color color;
 
-  const _DayCell({
+  const DayCell({
+    super.key,
     required this.day,
     required this.today,
     required this.state,

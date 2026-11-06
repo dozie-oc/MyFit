@@ -12,6 +12,7 @@ from src.schemas import (
     MealItemCreate,
     MealItemOut,
     MealOut,
+    MealUpdate,
     QuickMealCreate,
 )
 from src.routers.daily_summary import calculate_daily_summary
@@ -400,6 +401,160 @@ def get_meal(
         session,
         meal
     )
+
+
+@router.put(
+    "/{meal_id}",
+    response_model=MealOut,
+)
+def update_meal(
+    meal_id: int,
+    meal_data: MealUpdate,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+):
+    """
+    Update a meal's items, date, or meal_type and immediately recalculate
+    all nutrition totals and DailySummary.
+
+    All items are validated before mutating the existing meal so failed
+    updates never corrupt a saved meal.
+    """
+
+    meal = session.exec(
+        select(Meal).where(
+            Meal.id == meal_id,
+            Meal.user_id == current_user.id,
+            Meal.deleted_at.is_(None),
+        )
+    ).first()
+
+    if not meal:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meal not found",
+        )
+
+    unique_food_ids = {item.food_id for item in meal_data.items}
+    foods = session.exec(
+        select(FoodItem).where(
+            FoodItem.id.in_(unique_food_ids),
+            *visible_food(current_user.id, include_hidden=True),
+        )
+    ).all()
+    foods_by_id = {food.id: food for food in foods}
+
+    missing_food_ids = unique_food_ids - foods_by_id.keys()
+    if missing_food_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "One or more food items were not found.",
+                "food_ids": list(missing_food_ids),
+            },
+        )
+
+    food_service = FoodService(session=session, usda_client=None)  # type: ignore
+    prepared_items: list[dict] = []
+    total_calories = 0.0
+    total_protein = 0.0
+    total_carbs = 0.0
+    total_fat = 0.0
+
+    for item_data in meal_data.items:
+        food = foods_by_id[item_data.food_id]
+        try:
+            gram_weight = food_service.resolve_gram_weight(
+                food_id=food.id,
+                quantity=item_data.quantity,
+                portion_id=item_data.portion_id,
+                unit=item_data.unit,
+                user_id=current_user.id,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
+        nutrition = FoodService.calculate_nutrition_from_grams(
+            food=food,
+            gram_weight=gram_weight,
+        )
+
+        portion = None
+        if item_data.portion_id:
+            portion = food_service.get_food_portion_for_food(
+                food_id=food.id,
+                portion_id=item_data.portion_id,
+                user_id=current_user.id,
+            )
+
+        unit = portion.unit if portion else (item_data.unit or "g")
+
+        calories = nutrition["calories"]
+        protein = nutrition["protein"]
+        carbs = nutrition["carbs"]
+        fat = nutrition["fat"]
+
+        total_calories += calories
+        total_protein += protein
+        total_carbs += carbs
+        total_fat += fat
+
+        prepared_items.append(
+            {
+                "food_id": food.id,
+                "portion_id": item_data.portion_id,
+                "quantity": item_data.quantity,
+                "unit": unit,
+                "gram_weight": gram_weight,
+                "calories": calories,
+                "protein": protein,
+                "carbs": carbs,
+                "fat": fat,
+            }
+        )
+
+    old_date = meal.date
+    if meal_data.date is not None:
+        meal.date = meal_data.date
+    if meal_data.meal_type is not None:
+        meal.meal_type = meal_data.meal_type
+
+    now = datetime.now(timezone.utc)
+    existing_items = session.exec(
+        select(MealItem).where(
+            MealItem.meal_id == meal.id,
+            MealItem.deleted_at.is_(None),
+        )
+    ).all()
+    for existing_item in existing_items:
+        existing_item.deleted_at = now
+        session.add(existing_item)
+
+    for item_vals in prepared_items:
+        session.add(
+            MealItem(
+                meal_id=meal.id,
+                **item_vals,
+            )
+        )
+
+    meal.calories = round(total_calories, 2)
+    meal.protein = round(total_protein, 2)
+    meal.carbs = round(total_carbs, 2)
+    meal.fat = round(total_fat, 2)
+
+    session.add(meal)
+    session.commit()
+    session.refresh(meal)
+
+    calculate_daily_summary(session, current_user.id, meal.date)
+    if old_date != meal.date:
+        calculate_daily_summary(session, current_user.id, old_date)
+
+    return build_meal_response(session, meal)
 
 
 @router.patch(

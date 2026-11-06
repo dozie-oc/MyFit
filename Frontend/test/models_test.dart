@@ -127,6 +127,21 @@ void main() {
       expect(habit.frequency, 'daily');
       expect(habit.targetPerWeek, 7);
       expect(habit.color, '#6366F1');
+      expect(habit.isArchived, false);
+      expect(habit.archivedAt, isNull);
+    });
+
+    test('Habit fromJson parses archive state', () {
+      final habit = Habit.fromJson({
+        'id': 8,
+        'name': 'Old Habit',
+        'is_archived': true,
+        'archived_at': '2026-11-06T15:00:00Z',
+      });
+      expect(habit.id, 8);
+      expect(habit.name, 'Old Habit');
+      expect(habit.isArchived, true);
+      expect(habit.archivedAt, '2026-11-06T15:00:00Z');
     });
 
     test('HabitActivityDay parses lists of ids', () {

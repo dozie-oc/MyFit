@@ -268,6 +268,27 @@ class MealCreate(BaseModel):
         return val
 
 
+class MealUpdate(BaseModel):
+    """Input required to update a saved meal and recalculate its totals."""
+
+    date: Date | None = None
+    meal_type: str | None = None
+    items: list[MealItemCreate] = Field(
+        min_length=1,
+        max_length=100,
+    )
+
+    @field_validator("meal_type")
+    @classmethod
+    def validate_meal_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        val = value.strip().lower()
+        if val not in ("breakfast", "lunch", "dinner", "snack"):
+            return "snack"
+        return val
+
+
 class QuickMealCreate(BaseModel):
     date: date
     meal_type: str = Field(default="snack")
@@ -421,6 +442,8 @@ class HabitUpdate(BaseModel):
         le=7,
     )
 
+    is_archived: bool | None = None
+
 
 class HabitLogCreate(BaseModel):
     """Input for marking a habit as completed/not completed."""
@@ -442,6 +465,8 @@ class HabitOut(BaseModel):
     target_per_week: int
     # Date portion of created_at — used by clients to hide pre-creation days.
     created_at: datetime
+    is_archived: bool = False
+    archived_at: datetime | None = None
 
 
 class HabitLogOut(BaseModel):
@@ -468,6 +493,8 @@ class HabitWithLogsOut(BaseModel):
     target_per_week: int
     # Date portion of created_at — used by clients to hide pre-creation days.
     created_at: datetime
+    is_archived: bool = False
+    archived_at: datetime | None = None
     # All log entries for the last 35 days, ordered by date ascending.
     logs: list[HabitLogOut] = Field(default_factory=list)
 

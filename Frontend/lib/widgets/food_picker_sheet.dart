@@ -4,6 +4,7 @@ import '../models/models.dart';
 import '../services/api_client.dart';
 import '../screens/custom_food_screen.dart';
 import '../screens/recipe_builder_screen.dart';
+import '../theme.dart';
 
 class PickedFoodItem {
   final FoodItem food;
@@ -21,10 +22,41 @@ class PickedFoodItem {
     this.unit,
     required this.gramWeight,
   });
+
+  DraftMealItem toDraftMealItem() {
+    FoodPortion? matchedPortion;
+    if (portionId != null) {
+      for (final p in food.portions) {
+        if (p.id == portionId) {
+          matchedPortion = p;
+          break;
+        }
+      }
+    }
+    return DraftMealItem(
+      food: food,
+      quantity: quantity,
+      portionId: portionId,
+      portionName: matchedPortion?.name ?? portionName,
+      portionGramWeight: matchedPortion?.gramWeight ??
+          (portionId != null && quantity > 0 ? gramWeight / quantity : null),
+      portionBaseQuantity:
+          (matchedPortion != null && matchedPortion.quantity > 0)
+              ? matchedPortion.quantity
+              : 1.0,
+      unit: portionId != null
+          ? (matchedPortion?.unit ?? unit ?? 'serving')
+          : normalizeDirectUnit(unit),
+    );
+  }
 }
 
 class FoodPickerSheet extends StatefulWidget {
   final String? initialQuery;
+  final FoodItem? initialFood;
+  final int? initialPortionId;
+  final double? initialQuantity;
+  final String? initialUnit;
   final bool excludeRecipes;
   final bool allowCreateRecipe;
   final String confirmLabel;
@@ -32,6 +64,10 @@ class FoodPickerSheet extends StatefulWidget {
   const FoodPickerSheet({
     super.key,
     this.initialQuery,
+    this.initialFood,
+    this.initialPortionId,
+    this.initialQuantity,
+    this.initialUnit,
     this.excludeRecipes = false,
     this.allowCreateRecipe = true,
     this.confirmLabel = 'Add to Meal',
@@ -43,12 +79,12 @@ class FoodPickerSheet extends StatefulWidget {
 
 class _FoodPickerSheetState extends State<FoodPickerSheet> {
   late final TextEditingController _searchCtrl;
-  final _qtyCtrl = TextEditingController(text: '100');
-  final _unitCtrl = TextEditingController(text: 'g');
+  late final TextEditingController _qtyCtrl;
 
   List<FoodItem>? _foods;
   FoodItem? _selected;
   FoodPortion? _selectedPortion;
+  String _selectedUnit = 'g';
   bool _loading = false;
 
   @override
@@ -56,7 +92,33 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
     super.initState();
     final q = (widget.initialQuery ?? '').trim();
     _searchCtrl = TextEditingController(text: q);
+    _selected = widget.initialFood;
+    _selectedUnit = normalizeDirectUnit(widget.initialUnit);
+
+    if (_selected != null && widget.initialPortionId != null) {
+      for (final p in _selected!.portions) {
+        if (p.id == widget.initialPortionId) {
+          _selectedPortion = p;
+          break;
+        }
+      }
+    } else if (_selected != null &&
+        widget.initialUnit == null &&
+        _selected!.portions.isNotEmpty) {
+      _selectedPortion = _selected!.portions.first;
+    }
+
+    final initialQty = widget.initialQuantity ??
+        (_selectedPortion != null
+            ? (_selectedPortion!.quantity > 0 ? _selectedPortion!.quantity : 1.0)
+            : (_selectedUnit == 'g' || _selectedUnit == 'ml' ? 100.0 : 1.0));
+    _qtyCtrl = TextEditingController(text: _formatNumber(initialQty));
     _fetchFoods(q);
+  }
+
+  String _formatNumber(double val) {
+    if (val == val.roundToDouble()) return val.toInt().toString();
+    return val.toStringAsFixed(1);
   }
 
   Future<void> _fetchFoods(String query) async {
@@ -71,6 +133,23 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
       if (mounted) {
         setState(() {
           _foods = filtered;
+          if (_selected != null) {
+            for (final f in filtered) {
+              if (f.id == _selected!.id) {
+                _selected = f;
+                if (widget.initialPortionId != null &&
+                    _selectedPortion == null) {
+                  for (final p in f.portions) {
+                    if (p.id == widget.initialPortionId) {
+                      _selectedPortion = p;
+                      break;
+                    }
+                  }
+                }
+                break;
+              }
+            }
+          }
           _loading = false;
         });
       }
@@ -83,7 +162,6 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
   void dispose() {
     _searchCtrl.dispose();
     _qtyCtrl.dispose();
-    _unitCtrl.dispose();
     super.dispose();
   }
 
@@ -112,7 +190,11 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
     setState(() {
       _selected = f;
       _selectedPortion = f.portions.isNotEmpty ? f.portions.first : null;
-      _qtyCtrl.text = _selectedPortion != null ? '1' : '100';
+      _selectedUnit = 'g';
+      _qtyCtrl.text = _selectedPortion != null
+          ? _formatNumber(
+              _selectedPortion!.quantity > 0 ? _selectedPortion!.quantity : 1.0)
+          : '100';
     });
   }
 
@@ -225,6 +307,28 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
     }
   }
 
+  DraftMealItem? _currentPreviewItem() {
+    if (_selected == null) return null;
+    final qty = double.tryParse(_qtyCtrl.text.trim()) ?? 0;
+    final portion = _selectedPortion;
+    if (portion != null) {
+      return DraftMealItem(
+        food: _selected!,
+        quantity: qty,
+        portionId: portion.id,
+        portionName: portion.name,
+        portionGramWeight: portion.gramWeight,
+        portionBaseQuantity: portion.quantity > 0 ? portion.quantity : 1.0,
+        unit: portion.unit.isNotEmpty ? portion.unit : 'serving',
+      );
+    }
+    return DraftMealItem(
+      food: _selected!,
+      quantity: qty,
+      unit: _selectedUnit,
+    );
+  }
+
   void _confirm() {
     if (_selected == null) return;
     final qty = double.tryParse(_qtyCtrl.text.trim()) ?? 0;
@@ -236,7 +340,7 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
       final baseQty = portion.quantity > 0 ? portion.quantity : 1.0;
       gramWeight = (qty / baseQty) * portion.gramWeight;
     } else {
-      gramWeight = qty;
+      gramWeight = convertUnitToGrams(qty, _selectedUnit);
     }
 
     final item = PickedFoodItem(
@@ -244,7 +348,7 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
       quantity: qty,
       portionId: portion?.id,
       portionName: portion?.name,
-      unit: portion == null ? _unitCtrl.text.trim().toLowerCase() : null,
+      unit: portion == null ? _selectedUnit : null,
       gramWeight: gramWeight,
     );
 
@@ -401,11 +505,14 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
                 runSpacing: 6,
                 children: [
                   ChoiceChip(
-                    label: const Text('Custom grams'),
+                    label: const Text('Custom amount'),
                     selected: _selectedPortion == null,
                     onSelected: (_) => setState(() {
                       _selectedPortion = null;
-                      _qtyCtrl.text = '100';
+                      _qtyCtrl.text =
+                          (_selectedUnit == 'g' || _selectedUnit == 'ml')
+                              ? '100'
+                              : '1';
                     }),
                   ),
                   ...portions.map((p) {
@@ -415,7 +522,10 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
                           '${p.name} (${p.gramWeight.toStringAsFixed(0)}g)'),
                       selected: isSelected,
                       onSelected: (_) => setState(() {
-                        if (_selectedPortion == null) _qtyCtrl.text = '1';
+                        if (_selectedPortion == null) {
+                          _qtyCtrl.text = _formatNumber(
+                              p.quantity > 0 ? p.quantity : 1.0);
+                        }
                         _selectedPortion = p;
                       }),
                     );
@@ -436,25 +546,73 @@ class _FoodPickerSheetState extends State<FoodPickerSheet> {
                       decoration: InputDecoration(
                           labelText: _selectedPortion != null
                               ? 'Number of Servings'
-                              : 'Grams'),
+                              : 'Amount (${_selectedUnit.toUpperCase()})'),
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
                       inputFormatters: [
                         FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))
                       ],
+                      onChanged: (_) => setState(() {}),
                     ),
                   ),
                   if (_selectedPortion == null) ...[
                     const SizedBox(width: 12),
                     Expanded(
-                      child: TextField(
-                        controller: _unitCtrl,
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _selectedUnit,
                         decoration:
                             const InputDecoration(labelText: 'Unit'),
+                        items: kSupportedDirectUnits
+                            .map((u) => DropdownMenuItem(
+                                  value: u,
+                                  child: Text(u),
+                                ))
+                            .toList(),
+                        onChanged: (val) {
+                          if (val == null) return;
+                          setState(() {
+                            _selectedUnit = val;
+                          });
+                        },
                       ),
                     ),
                   ],
                 ],
+              ),
+              Builder(
+                builder: (_) {
+                  final preview = _currentPreviewItem();
+                  if (preview == null) return const SizedBox.shrink();
+                  return Container(
+                    margin: const EdgeInsets.only(top: 14),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFFE5E7EB)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Item nutrition (${preview.gramWeight.toStringAsFixed(0)}g)',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF6B7280),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        NutrientRow(
+                          calories: preview.calories,
+                          protein: preview.protein,
+                          carbs: preview.carbs,
+                          fat: preview.fat,
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
               const SizedBox(height: 20),
               FilledButton(

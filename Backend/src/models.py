@@ -115,6 +115,12 @@ class Habit(SQLModel, table=True):
         default_factory=utc_now
     )
 
+    is_archived: bool = Field(
+        default=False,
+    )
+
+    archived_at: datetime | None = None
+
     deleted_at: datetime | None = None
 
 

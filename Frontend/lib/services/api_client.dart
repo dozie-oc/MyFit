@@ -422,6 +422,12 @@ class ApiClient {
     notifyDataChanged({DataScope.meals});
   }
 
+  static Future<Meal> updateMeal(int id, Map<String, dynamic> body) async {
+    final res = await put('/meals/$id', body);
+    notifyDataChanged({DataScope.meals});
+    return Meal.fromJson(res as Map<String, dynamic>);
+  }
+
   static Future<Meal> quickAddMeal({
     required String date,
     String mealType = 'snack',
@@ -569,8 +575,15 @@ class ApiClient {
   // HABITS
   // ─────────────────────────────────────────
 
-  static Future<List<Habit>> getHabits([int days = 35]) async {
-    final res = await get('/habits', {'days': days.toString()});
+  static Future<List<Habit>> getHabits([int days = 35, bool archived = false]) async {
+    final params = {'days': days.toString()};
+    if (archived) params['archived'] = 'true';
+    final res = await get('/habits', params);
+    return _list(res, Habit.fromJson);
+  }
+
+  static Future<List<Habit>> getArchivedHabits([int days = 35]) async {
+    final res = await get('/habits/archived', {'days': days.toString()});
     return _list(res, Habit.fromJson);
   }
 
@@ -596,12 +609,14 @@ class ApiClient {
     String? description,
     String? color,
     int? targetPerWeek,
+    bool? isArchived,
   }) async {
     final body = <String, dynamic>{
       if (name != null) 'name': name,
       if (description != null) 'description': description,
       if (color != null) 'color': color,
       if (targetPerWeek != null) 'target_per_week': targetPerWeek,
+      if (isArchived != null) 'is_archived': isArchived,
     };
     final res = await patch('/habits/$id', body);
     notifyDataChanged({DataScope.habits});
@@ -611,6 +626,18 @@ class ApiClient {
   static Future<void> deleteHabit(int id) async {
     await delete('/habits/$id');
     notifyDataChanged({DataScope.habits});
+  }
+
+  static Future<Map<String, dynamic>> archiveHabit(int id) async {
+    final res = await post('/habits/$id/archive', {});
+    notifyDataChanged({DataScope.habits});
+    return res;
+  }
+
+  static Future<Map<String, dynamic>> restoreHabit(int id) async {
+    final res = await post('/habits/$id/restore', {});
+    notifyDataChanged({DataScope.habits});
+    return res;
   }
 
   static Future<Map<String, dynamic>> logHabit(
